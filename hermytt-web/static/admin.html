@@ -197,9 +197,10 @@ async function refreshSessions() {
   const tbody = document.getElementById('sessions-table');
   document.getElementById('stat-sessions').textContent = data.sessions.length;
 
+  const esc = s => { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; };
   tbody.innerHTML = data.sessions.map(s => `
     <tr>
-      <td>${s.id.slice(0, 8)}</td>
+      <td>${esc(s.id.slice(0, 8))}</td>
       <td><span class="badge badge-green">active</span></td>
       <td>
         <a href="/#${encodeURIComponent(s.id)}" class="btn">open</a>
@@ -217,11 +218,12 @@ async function refreshInfo() {
     document.getElementById('stat-uptime').textContent = 'running';
 
     const tbody = document.getElementById('transports-table');
+    const esc = s => { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; };
     tbody.innerHTML = data.transports.map(t => `
       <tr>
-        <td>${t.name}</td>
+        <td>${esc(t.name)}</td>
         <td><span class="badge badge-green">active</span></td>
-        <td style="color:#6f6f8f">${t.endpoint || '-'}</td>
+        <td style="color:#6f6f8f">${esc(t.endpoint || '-')}</td>
       </tr>
     `).join('');
   } catch(e) {

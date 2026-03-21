@@ -80,7 +80,6 @@ impl Transport for RestTransport {
             .route("/stdin", post(write_stdin_default))
             .route("/stdout", get(stream_stdout_default))
             .route("/exec", post(exec_default))
-            .route("/session/{id}/exec", post(exec_session))
             .layer(middleware::from_fn_with_state(
                 state.clone(),
                 auth_middleware,
@@ -323,14 +322,6 @@ struct ExecResponse {
 
 async fn exec_default(
     State(_state): State<AppState>,
-    Json(body): Json<StdinBody>,
-) -> Result<Json<ExecResponse>, StatusCode> {
-    run_exec(&body.input).await
-}
-
-async fn exec_session(
-    State(_state): State<AppState>,
-    Path(_id): Path<String>,
     Json(body): Json<StdinBody>,
 ) -> Result<Json<ExecResponse>, StatusCode> {
     run_exec(&body.input).await

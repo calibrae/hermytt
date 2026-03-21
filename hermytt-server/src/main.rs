@@ -10,7 +10,6 @@ use hermytt_transport::mqtt::MqttTransport;
 use hermytt_transport::rest::RestTransport;
 use hermytt_transport::tcp::TcpTransport;
 use hermytt_transport::telegram::TelegramTransport;
-use hermytt_transport::websocket::WebSocketTransport;
 use tracing::{info, warn};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -165,21 +164,11 @@ async fn start_server(
         }));
     }
 
-    if let Some(ws_config) = &config.transport.websocket {
-        let transport = Arc::new(WebSocketTransport {
-            port: ws_config.port,
-            bind: config.server.bind.clone(),
-            auth_token: auth_token.clone(),
-        });
-        let sessions = sessions.clone();
-        tasks.push(tokio::spawn(async move {
-            if let Err(e) = transport.serve(sessions).await {
-                tracing::error!(transport = "websocket", error = %e, "transport failed");
-            }
-        }));
-    }
 
     if let Some(mqtt_config) = &config.transport.mqtt {
+        if mqtt_config.username.is_none() {
+            warn!("MQTT transport has no broker auth — anyone on the broker can execute commands!");
+        }
         let transport = Arc::new(MqttTransport {
             broker_host: mqtt_config.broker.clone(),
             broker_port: mqtt_config.port,
@@ -209,6 +198,9 @@ async fn start_server(
     }
 
     if let Some(tg_config) = &config.transport.telegram {
+        if tg_config.chat_ids.is_empty() {
+            warn!("Telegram transport has no chat_ids whitelist — any Telegram user can execute commands!");
+        }
         let transport = Arc::new(TelegramTransport {
             bot_token: tg_config.bot_token.clone(),
             chat_ids: tg_config.chat_ids.clone(),

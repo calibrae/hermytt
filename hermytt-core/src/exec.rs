@@ -1,15 +1,24 @@
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::Result;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
+use tokio::sync::Semaphore;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_OUTPUT: usize = 1024 * 1024; // 1MB cap per stream
+const MAX_CONCURRENT: usize = 8;
+
+static EXEC_SEMAPHORE: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(MAX_CONCURRENT));
 
 /// Execute a shell command directly (no PTY), capture stdout + stderr.
-/// Timeout after 30s. Output capped at 1MB per stream.
+/// Timeout after 30s. Output capped at 1MB per stream. Max 8 concurrent.
 pub async fn exec(cmd: &str, shell: &str) -> Result<ExecResult> {
+    let _permit = EXEC_SEMAPHORE
+        .acquire()
+        .await
+        .map_err(|_| anyhow::anyhow!("exec semaphore closed"))?;
     let mut child = Command::new(shell)
         .arg("-c")
         .arg(cmd)
