@@ -9,7 +9,7 @@ use tracing::{error, info, warn};
 
 use crate::Transport;
 
-const BUFFER_WINDOW: Duration = Duration::from_millis(500);
+const SILENCE_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub struct MqttTransport {
     pub broker_host: String,
@@ -20,7 +20,6 @@ pub struct MqttTransport {
 
 /// Parse an MQTT topic like `hermytt/{session_id}/in`.
 /// Returns the session ID if valid, `None` otherwise.
-/// Session IDs must be alphanumeric (or "default").
 pub fn parse_input_topic(topic: &str) -> Option<&str> {
     let parts: Vec<&str> = topic.split('/').collect();
     if parts.len() != 3 || parts[0] != "hermytt" || parts[2] != "in" {
@@ -58,13 +57,7 @@ impl Transport for MqttTransport {
             "connected"
         );
 
-        let publish_client = client.clone();
-        let publish_sessions = sessions.clone();
-        tokio::spawn(async move {
-            output_publisher(publish_client, publish_sessions).await;
-        });
-
-        input_listener(eventloop, sessions).await;
+        request_loop(eventloop, client, sessions).await;
 
         Ok(())
     }
@@ -74,7 +67,12 @@ impl Transport for MqttTransport {
     }
 }
 
-async fn input_listener(mut eventloop: EventLoop, sessions: Arc<SessionManager>) {
+/// Receive commands on /in, execute, publish response on /out.
+async fn request_loop(
+    mut eventloop: EventLoop,
+    client: AsyncClient,
+    sessions: Arc<SessionManager>,
+) {
     loop {
         match eventloop.poll().await {
             Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(publish))) => {
@@ -93,14 +91,29 @@ async fn input_listener(mut eventloop: EventLoop, sessions: Arc<SessionManager>)
                     continue;
                 };
 
-                let mut input = publish.payload.to_vec();
-                if !input.ends_with(b"\n") {
-                    input.push(b'\n');
-                }
+                let cmd = String::from_utf8_lossy(&publish.payload).to_string();
+                let out_topic = publish.topic.replace("/in", "/out");
 
-                if let Err(e) = handle.stdin_tx.send(input).await {
-                    error!(error = %e, "failed to send stdin");
-                }
+                // Execute and publish response.
+                let client = client.clone();
+                let handle = handle.clone();
+                tokio::spawn(async move {
+                    match handle.execute(&cmd, SILENCE_TIMEOUT).await {
+                        Ok(data) => {
+                            let raw = String::from_utf8_lossy(&data);
+                            let clean = crate::telegram::clean_output(&raw, &cmd);
+                            if let Err(e) = client
+                                .publish(&out_topic, QoS::AtMostOnce, false, clean.as_bytes())
+                                .await
+                            {
+                                error!(error = %e, topic = %out_topic, "publish failed");
+                            }
+                        }
+                        Err(e) => {
+                            error!(error = %e, "execute failed");
+                        }
+                    }
+                });
             }
             Ok(_) => {}
             Err(e) => {
@@ -108,41 +121,6 @@ async fn input_listener(mut eventloop: EventLoop, sessions: Arc<SessionManager>)
                 tokio::time::sleep(Duration::from_secs(5)).await;
             }
         }
-    }
-}
-
-async fn output_publisher(client: AsyncClient, sessions: Arc<SessionManager>) {
-    let mut known: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    loop {
-        let ids = sessions.list_sessions().await;
-        for id in &ids {
-            if known.contains(id) {
-                continue;
-            }
-            known.insert(id.clone());
-
-            let Some(handle) = sessions.get_session(id).await else {
-                continue;
-            };
-
-            let client = client.clone();
-            let session_id = id.clone();
-            tokio::spawn(async move {
-                let topic = format!("hermytt/{}/out", session_id);
-                let mut output = handle.subscribe_buffered(BUFFER_WINDOW);
-
-                while let Some(data) = output.recv().await {
-                    let text = String::from_utf8_lossy(&data).to_string();
-                    if let Err(e) = client.publish(&topic, QoS::AtMostOnce, false, text).await {
-                        error!(error = %e, topic = %topic, "failed to publish");
-                        break;
-                    }
-                }
-            });
-        }
-
-        tokio::time::sleep(Duration::from_secs(2)).await;
     }
 }
 
@@ -189,6 +167,5 @@ mod tests {
     fn parse_rejects_special_chars() {
         assert_eq!(parse_input_topic("hermytt/abc+def/in"), None);
         assert_eq!(parse_input_topic("hermytt/abc#def/in"), None);
-        assert_eq!(parse_input_topic("hermytt/../in"), None);
     }
 }

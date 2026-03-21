@@ -1,4 +1,5 @@
 pub mod buffer;
+pub mod platform;
 pub mod session;
 
 pub use buffer::BufferedOutput;

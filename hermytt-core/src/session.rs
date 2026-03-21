@@ -29,6 +29,45 @@ impl SessionHandle {
     ) -> crate::buffer::BufferedOutput {
         crate::buffer::BufferedOutput::new(self.output_tx.subscribe(), window)
     }
+
+    /// Execute a command and collect output until the shell goes quiet.
+    ///
+    /// Returns raw bytes. Caller is responsible for decoding/stripping ANSI.
+    /// `silence` is how long to wait with no output before considering the
+    /// command done (e.g., 500ms).
+    pub async fn execute(&self, cmd: &str, silence: std::time::Duration) -> Result<Vec<u8>> {
+        let mut rx = self.output_tx.subscribe();
+
+        // Send the command.
+        let mut input = cmd.to_string();
+        if !input.ends_with('\n') {
+            input.push('\n');
+        }
+        self.stdin_tx
+            .send(input.into_bytes())
+            .await
+            .map_err(|_| anyhow::anyhow!("session stdin closed"))?;
+
+        // Collect output until silence.
+        let mut output = Vec::new();
+        loop {
+            tokio::select! {
+                result = rx.recv() => {
+                    match result {
+                        Ok(data) => output.extend_from_slice(&data),
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+                _ = tokio::time::sleep(silence) => {
+                    // No output for `silence` duration — command is done.
+                    break;
+                }
+            }
+        }
+
+        Ok(output)
+    }
 }
 
 const MAX_LINE_LEN: usize = 4096;
@@ -119,7 +158,7 @@ impl Session {
             .context("failed to open PTY")?;
 
         let mut cmd = CommandBuilder::new(&self.shell);
-        cmd.env("TERM", "xterm-256color");
+        crate::platform::configure_command(&mut cmd);
         let child = pair
             .slave
             .spawn_command(cmd)

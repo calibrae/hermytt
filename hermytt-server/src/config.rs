@@ -45,6 +45,8 @@ pub struct TransportConfig {
     pub mqtt: Option<MqttConfig>,
     #[serde(default)]
     pub tcp: Option<TcpConfig>,
+    #[serde(default)]
+    pub telegram: Option<TelegramConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,11 +76,18 @@ pub struct TcpConfig {
     pub port: u16,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct TelegramConfig {
+    pub bot_token: String,
+    #[serde(default)]
+    pub chat_ids: Vec<i64>,
+}
+
 fn default_bind() -> String {
     "127.0.0.1".to_string()
 }
 fn default_shell() -> String {
-    "/bin/bash".to_string()
+    hermytt_core::platform::default_shell().to_string()
 }
 fn default_scrollback() -> usize {
     1000
@@ -120,6 +129,7 @@ impl Config {
                 websocket: Some(WebSocketConfig { port: 7778 }),
                 mqtt: None,
                 tcp: None,
+                telegram: None,
             },
         }
     }

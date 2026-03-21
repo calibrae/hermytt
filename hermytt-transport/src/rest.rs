@@ -72,6 +72,8 @@ impl Transport for RestTransport {
             .route("/session/{id}/stdout", get(stream_stdout))
             .route("/stdin", post(write_stdin_default))
             .route("/stdout", get(stream_stdout_default))
+            .route("/exec", post(exec_default))
+            .route("/session/{id}/exec", post(exec_session))
             .layer(middleware::from_fn_with_state(
                 state.clone(),
                 auth_middleware,
@@ -198,6 +200,48 @@ async fn stream_stdout_default(
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     };
     Ok(resolve_stdout(handle).await)
+}
+
+/// Execute a command and return the output (request-response pattern).
+const EXEC_SILENCE: Duration = Duration::from_millis(500);
+
+#[derive(Serialize)]
+struct ExecResponse {
+    output: String,
+}
+
+async fn exec_default(
+    State(state): State<AppState>,
+    Json(body): Json<StdinBody>,
+) -> Result<Json<ExecResponse>, StatusCode> {
+    let Ok(handle) = state.sessions.default_session().await else {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    };
+    exec_on_handle(&handle, &body.input).await
+}
+
+async fn exec_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<StdinBody>,
+) -> Result<Json<ExecResponse>, StatusCode> {
+    let Some(handle) = state.sessions.get_session(&id).await else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+    exec_on_handle(&handle, &body.input).await
+}
+
+async fn exec_on_handle(
+    handle: &hermytt_core::SessionHandle,
+    cmd: &str,
+) -> Result<Json<ExecResponse>, StatusCode> {
+    let raw = handle
+        .execute(cmd, EXEC_SILENCE)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let text = String::from_utf8_lossy(&raw);
+    let clean = crate::telegram::clean_output(&text, cmd);
+    Ok(Json(ExecResponse { output: clean }))
 }
 
 /// SSE buffer window — accumulate PTY output for this long before sending.
