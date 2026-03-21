@@ -81,17 +81,20 @@ impl Transport for RestTransport {
             .route("/stdout", get(stream_stdout_default))
             .route("/exec", post(exec_default))
             .route("/session/{id}/exec", post(exec_session))
-            .route("/ws", get(ws_handler_default))
-            .route("/ws/{id}", get(ws_handler))
             .layer(middleware::from_fn_with_state(
                 state.clone(),
                 auth_middleware,
             ));
 
+        // WebSocket: auth via first message, not query param.
+        let ws_routes = Router::new()
+            .route("/ws", get(ws_handler_default))
+            .route("/ws/{id}", get(ws_handler));
+
         // Web UI from hermytt-web (public, no auth).
         let web = hermytt_web::routes();
 
-        let app = web.merge(api).with_state(state);
+        let app = web.merge(api).merge(ws_routes).with_state(state);
 
         let addr = format!("{}:{}", self.bind, self.port);
         info!(transport = "rest", addr = %addr, "listening");
@@ -224,17 +227,10 @@ async fn stream_stdout_default(
 async fn ws_handler(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Query(query): Query<TokenQuery>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    if !check_ws_auth(&state, &query) {
-        return ws.on_upgrade(|mut socket| async move {
-            let _ = socket.send(Message::Close(Some(CloseFrame {
-                code: 4401, reason: "unauthorized".into(),
-            }))).await;
-        });
-    }
     ws.on_upgrade(move |socket| async move {
+        let Some(socket) = ws_auth(socket, &state.auth_token).await else { return };
         let Some(handle) = state.sessions.get_session(&id).await else { return };
         handle_ws_socket(socket, handle).await;
     })
@@ -242,26 +238,44 @@ async fn ws_handler(
 
 async fn ws_handler_default(
     State(state): State<AppState>,
-    Query(query): Query<TokenQuery>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    if !check_ws_auth(&state, &query) {
-        return ws.on_upgrade(|mut socket| async move {
-            let _ = socket.send(Message::Close(Some(CloseFrame {
-                code: 4401, reason: "unauthorized".into(),
-            }))).await;
-        });
-    }
     ws.on_upgrade(move |socket| async move {
+        let Some(socket) = ws_auth(socket, &state.auth_token).await else { return };
         let Ok(handle) = state.sessions.default_session().await else { return };
         handle_ws_socket(socket, handle).await;
     })
 }
 
-fn check_ws_auth(state: &AppState, query: &TokenQuery) -> bool {
-    match &state.auth_token {
-        None => true,
-        Some(expected) => query.token.as_deref() == Some(expected.as_str()),
+/// First-message auth: client sends token as first WS message.
+/// Returns the socket if auth passes, None if rejected.
+async fn ws_auth(mut socket: WebSocket, expected: &Option<String>) -> Option<WebSocket> {
+    let Some(token) = expected else {
+        // No auth configured.
+        return Some(socket);
+    };
+
+    // Wait up to 5s for the first message (the token).
+    let msg = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        socket.recv(),
+    )
+    .await;
+
+    match msg {
+        Ok(Some(Ok(Message::Text(provided)))) if provided.as_str() == token.as_str() => {
+            let _ = socket.send(Message::text("auth:ok")).await;
+            Some(socket)
+        }
+        _ => {
+            let _ = socket
+                .send(Message::Close(Some(CloseFrame {
+                    code: 4401,
+                    reason: "unauthorized".into(),
+                })))
+                .await;
+            None
+        }
     }
 }
 

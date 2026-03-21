@@ -144,7 +144,18 @@
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
 <script>
 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-const TOKEN = new URLSearchParams(location.search).get('token') || '';
+
+// Token: read from URL on first visit, store in sessionStorage, strip from URL.
+const urlToken = new URLSearchParams(location.search).get('token');
+if (urlToken) {
+  sessionStorage.setItem('hermytt-token', urlToken);
+  // Remove token from URL (no page reload).
+  const clean = new URL(location);
+  clean.searchParams.delete('token');
+  history.replaceState(null, '', clean);
+}
+const TOKEN = sessionStorage.getItem('hermytt-token') || '';
+
 const sessions = new Map();
 let activeId = null;
 
@@ -165,8 +176,7 @@ function authHeaders() {
 }
 
 async function api(path, opts = {}) {
-  const tokenParam = TOKEN ? `?token=${TOKEN}` : '';
-  return fetch(`${path}${tokenParam}`, { ...opts, headers: { ...authHeaders(), ...opts.headers } });
+  return fetch(path, { ...opts, headers: { ...authHeaders(), ...opts.headers } });
 }
 
 async function fetchSessions() {
@@ -212,14 +222,30 @@ function addSession(id) {
 
 function connectSession(session) {
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-  const tokenParam = TOKEN ? `?token=${TOKEN}` : '';
-  const ws = new WebSocket(`${scheme}://${location.host}/ws/${session.id}${tokenParam}`);
+  const ws = new WebSocket(`${scheme}://${location.host}/ws/${session.id}`);
+  let authed = false;
 
-  ws.onopen = () => { if (activeId === session.id) updateStatus(true, session.id.slice(0,8)); };
-  ws.onmessage = (e) => session.term.write(e.data);
+  ws.onopen = () => {
+    // First-message auth: send token before any PTY data.
+    if (TOKEN) ws.send(TOKEN);
+  };
+
+  ws.onmessage = (e) => {
+    if (!authed) {
+      if (e.data === 'auth:ok') {
+        authed = true;
+        if (activeId === session.id) updateStatus(true, session.id.slice(0,8));
+        return;
+      }
+      // If server didn't ack, it'll close with 4401.
+      return;
+    }
+    session.term.write(e.data);
+  };
+
   ws.onclose = (e) => {
     if (e.code === 4401) {
-      session.term.write('\r\n\x1b[31m[hermytt] unauthorized\x1b[0m\r\n');
+      session.term.write('\r\n\x1b[31m[hermytt] unauthorized — check your token\x1b[0m\r\n');
       updateStatus(false, 'unauthorized');
       return;
     }
@@ -228,8 +254,9 @@ function connectSession(session) {
       setTimeout(() => { if (sessions.has(session.id)) connectSession(session); }, 2000);
     }
   };
+
   ws.onerror = () => ws.close();
-  session.term.onData((data) => { if (ws.readyState === WebSocket.OPEN) ws.send(data); });
+  session.term.onData((data) => { if (ws.readyState === WebSocket.OPEN && authed) ws.send(data); });
   session.ws = ws;
 }
 

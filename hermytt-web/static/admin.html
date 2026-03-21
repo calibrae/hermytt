@@ -176,16 +176,22 @@
 </div>
 
 <script>
-const TOKEN = new URLSearchParams(location.search).get('token') || '';
+const urlToken = new URLSearchParams(location.search).get('token');
+if (urlToken) {
+  sessionStorage.setItem('hermytt-token', urlToken);
+  const clean = new URL(location);
+  clean.searchParams.delete('token');
+  history.replaceState(null, '', clean);
+}
+const TOKEN = sessionStorage.getItem('hermytt-token') || '';
+
 function authHeaders() {
   const h = { 'Content-Type': 'application/json' };
   if (TOKEN) h['X-Hermytt-Key'] = TOKEN;
   return h;
 }
-function tokenParam() { return TOKEN ? `?token=${TOKEN}` : ''; }
-
 async function refreshSessions() {
-  const res = await fetch(`/sessions${tokenParam()}`, { headers: authHeaders() });
+  const res = await fetch('/sessions', { headers: authHeaders() });
   if (!res.ok) return;
   const data = await res.json();
   const tbody = document.getElementById('sessions-table');
@@ -196,7 +202,7 @@ async function refreshSessions() {
       <td>${s.id.slice(0, 8)}</td>
       <td><span class="badge badge-green">active</span></td>
       <td>
-        <a href="/?token=${encodeURIComponent(TOKEN)}#${encodeURIComponent(s.id)}" class="btn">open</a>
+        <a href="/#${encodeURIComponent(s.id)}" class="btn">open</a>
       </td>
     </tr>
   `).join('') || '<tr><td colspan="3" style="color:#6f6f8f">no sessions</td></tr>';
@@ -204,7 +210,7 @@ async function refreshSessions() {
 
 async function refreshInfo() {
   try {
-    const res = await fetch(`/info${tokenParam()}`, { headers: authHeaders() });
+    const res = await fetch('/info', { headers: authHeaders() });
     if (!res.ok) return;
     const data = await res.json();
     document.getElementById('stat-shell').textContent = data.shell.split('/').pop();
@@ -224,7 +230,7 @@ async function refreshInfo() {
 }
 
 document.getElementById('btn-new-session').addEventListener('click', async () => {
-  await fetch(`/session${tokenParam()}`, { method: 'POST', headers: authHeaders() });
+  await fetch('/session', { method: 'POST', headers: authHeaders() });
   refreshSessions();
 });
 
@@ -242,7 +248,7 @@ async function runExec() {
   output.style.display = 'block';
   output.textContent = 'running...';
 
-  const res = await fetch(`/exec${tokenParam()}`, {
+  const res = await fetch('/exec', {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify({ input: cmd }),
