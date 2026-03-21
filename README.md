@@ -124,7 +124,7 @@ token = "your-secret-token"
 port = 7777
 
 [transport.mqtt]
-broker = "10.11.0.7"
+broker = "mqtt.example.com"
 port = 1883
 username = "mqtt"
 password = "secret"
