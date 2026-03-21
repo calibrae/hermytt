@@ -312,7 +312,7 @@ async fn ws_handler(
     ws.on_upgrade(move |socket| async move {
         let Some(socket) = ws_auth(socket, &state.auth_token).await else { return };
         let Some(handle) = state.sessions.get_session(&id).await else { return };
-        handle_ws_socket(socket, handle).await;
+        handle_ws_socket(socket, handle, state.sessions.clone()).await;
     })
 }
 
@@ -323,7 +323,7 @@ async fn ws_handler_default(
     ws.on_upgrade(move |socket| async move {
         let Some(socket) = ws_auth(socket, &state.auth_token).await else { return };
         let Ok(handle) = state.sessions.default_session().await else { return };
-        handle_ws_socket(socket, handle).await;
+        handle_ws_socket(socket, handle, state.sessions.clone()).await;
     })
 }
 
@@ -359,8 +359,13 @@ async fn ws_auth(mut socket: WebSocket, expected: &Option<String>) -> Option<Web
     }
 }
 
-async fn handle_ws_socket(mut socket: WebSocket, handle: hermytt_core::SessionHandle) {
+async fn handle_ws_socket(
+    mut socket: WebSocket,
+    handle: hermytt_core::SessionHandle,
+    sessions: Arc<SessionManager>,
+) {
     let stdin_tx = handle.stdin_tx.clone();
+    let session_id = handle.id.clone();
     let mut output_rx = handle.subscribe_output();
 
     loop {
@@ -377,6 +382,20 @@ async fn handle_ws_socket(mut socket: WebSocket, handle: hermytt_core::SessionHa
             msg = socket.recv() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
+                        // Intercept resize messages: {"resize":[cols,rows]}
+                        if text.starts_with("{\"resize\"") {
+                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.as_str()) {
+                                if let Some(dims) = val.get("resize").and_then(|v| v.as_array()) {
+                                    if let (Some(cols), Some(rows)) = (
+                                        dims.first().and_then(|v| v.as_u64()),
+                                        dims.get(1).and_then(|v| v.as_u64()),
+                                    ) {
+                                        let _ = sessions.resize_session(&session_id, cols as u16, rows as u16).await;
+                                    }
+                                }
+                            }
+                            continue;
+                        }
                         if stdin_tx.send(text.as_bytes().to_vec()).await.is_err() { break; }
                     }
                     Some(Ok(Message::Binary(data))) => {

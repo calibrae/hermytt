@@ -116,7 +116,7 @@ pub struct Session {
     pub handle: SessionHandle,
     stdin_rx: tokio::sync::Mutex<Option<mpsc::Receiver<Vec<u8>>>>,
     child: tokio::sync::Mutex<Option<Box<dyn Child + Send>>>,
-    // Keep the slave alive until the session is dropped.
+    master: std::sync::Mutex<Option<Box<dyn portable_pty::MasterPty + Send>>>,
     _slave: std::sync::Mutex<Option<Box<dyn portable_pty::SlavePty + Send>>>,
     shell: String,
 }
@@ -141,6 +141,7 @@ impl Session {
             handle,
             stdin_rx: tokio::sync::Mutex::new(Some(stdin_rx)),
             child: tokio::sync::Mutex::new(None),
+            master: std::sync::Mutex::new(None),
             _slave: std::sync::Mutex::new(None),
             shell: shell.to_string(),
         }))
@@ -172,11 +173,11 @@ impl Session {
             .context("failed to spawn shell")?;
 
         *self.child.lock().await = Some(child);
-        // H1 fix: keep slave alive to avoid race on macOS.
         *self._slave.lock().unwrap() = Some(pair.slave);
 
         let mut master_writer = pair.master.take_writer()?;
         let mut master_reader = pair.master.try_clone_reader()?;
+        *self.master.lock().unwrap() = Some(pair.master);
 
         let output_tx = self.handle.output_tx.clone();
         let scrollback = self.handle.scrollback.clone();
@@ -218,6 +219,21 @@ impl Session {
         });
 
         info!(session = %self.handle.id, shell = %self.shell, "session started");
+        Ok(())
+    }
+
+    pub fn resize(&self, cols: u16, rows: u16) -> Result<()> {
+        let master = self.master.lock().unwrap();
+        let Some(master) = master.as_ref() else {
+            anyhow::bail!("session not started");
+        };
+        master.resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })?;
+        info!(session = %self.handle.id, cols, rows, "resized");
         Ok(())
     }
 
@@ -275,6 +291,14 @@ impl SessionManager {
 
     pub async fn get_session(&self, id: &str) -> Option<SessionHandle> {
         self.sessions.read().await.get(id).map(|s| s.handle.clone())
+    }
+
+    pub async fn resize_session(&self, id: &str, cols: u16, rows: u16) -> Result<()> {
+        let sessions = self.sessions.read().await;
+        let Some(session) = sessions.get(id) else {
+            anyhow::bail!("session not found");
+        };
+        session.resize(cols, rows)
     }
 
     pub async fn list_sessions(&self) -> Vec<SessionId> {

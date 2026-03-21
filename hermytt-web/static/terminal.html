@@ -169,6 +169,15 @@ const THEME = {
   brightCyan: '#67e8f9', brightWhite: '#ffffff',
 };
 
+function fitAndResize(session) {
+  if (!session) return;
+  session.fitAddon.fit();
+  if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+    const dims = session.fitAddon.proposeDimensions();
+    if (dims) session.ws.send(JSON.stringify({ resize: [dims.cols, dims.rows] }));
+  }
+}
+
 function authHeaders() {
   const h = {};
   if (TOKEN) h['X-Hermytt-Key'] = TOKEN;
@@ -281,7 +290,7 @@ function switchTo(id) {
   if (container) container.classList.add('active');
   const session = sessions.get(id);
   if (session) {
-    setTimeout(() => session.fitAddon.fit(), 50);
+    setTimeout(() => fitAndResize(session), 50);
     if (!isMobile) session.term.focus();
     const connected = session.ws && session.ws.readyState === WebSocket.OPEN;
     updateStatus(connected, connected ? id.slice(0,8) : 'connecting...');
@@ -313,7 +322,7 @@ document.getElementById('new-tab').addEventListener('click', async () => {
 });
 
 window.addEventListener('resize', () => {
-  if (activeId) sessions.get(activeId)?.fitAddon.fit();
+  if (activeId) fitAndResize(sessions.get(activeId));
 });
 
 document.addEventListener('keydown', (e) => {
@@ -330,7 +339,7 @@ document.addEventListener('keydown', (e) => {
 if (isMobile) document.body.classList.add('mobile');
 function fixHeight() {
   document.body.style.height = window.innerHeight + 'px';
-  if (activeId) setTimeout(() => sessions.get(activeId)?.fitAddon.fit(), 50);
+  if (activeId) setTimeout(() => fitAndResize(sessions.get(activeId)), 50);
 }
 fixHeight();
 window.addEventListener('resize', fixHeight);
@@ -364,7 +373,7 @@ document.getElementById('btn-tab').addEventListener('click', () => {
 
 if (window.visualViewport) {
   window.visualViewport.addEventListener('resize', () => {
-    if (activeId) setTimeout(() => sessions.get(activeId)?.fitAddon.fit(), 100);
+    if (activeId) setTimeout(() => fitAndResize(sessions.get(activeId)), 100);
   });
 }
 
