@@ -21,6 +21,7 @@ portable-pty = "0.9"
 
 # Web / HTTP
 axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["cors"] }
 
 # MQTT
 rumqttc = "0.24"

@@ -14,6 +14,7 @@ use axum::response::{IntoResponse, Json};
 use axum::routing::{get, post};
 use hermytt_core::{BufferedOutput, SessionManager};
 use serde::{Deserialize, Serialize};
+use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 
 use crate::Transport;
@@ -99,7 +100,14 @@ impl Transport for RestTransport {
         // Web UI from hermytt-web (public, no auth).
         let web = hermytt_web::routes();
 
-        let app = web.merge(api).merge(ws_routes).with_state(state);
+        // TODO: lock down allow_origin to configured origins when crytter ships.
+        // For now, permissive for dev. In prod, set specific origins.
+        let cors = CorsLayer::new()
+            .allow_origin(Any)
+            .allow_headers(Any)
+            .allow_methods(Any);
+
+        let app = web.merge(api).merge(ws_routes).with_state(state).layer(cors);
 
         let addr = format!("{}:{}", self.bind, self.port);
         info!(transport = "rest", addr = %addr, "listening");
