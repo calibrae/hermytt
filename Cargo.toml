@@ -24,6 +24,7 @@ axum = { version = "0.8", features = ["ws"] }
 
 # MQTT
 rumqttc = "0.24"
+rumqttd = "0.20"
 
 # Serialization & config
 serde = { version = "1", features = ["derive"] }
