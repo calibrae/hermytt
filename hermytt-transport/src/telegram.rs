@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -5,13 +6,20 @@ use anyhow::Result;
 use async_trait::async_trait;
 use hermytt_core::SessionManager;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
 use crate::Transport;
 
-/// How long to wait with no output before considering a command done.
 const SILENCE_TIMEOUT: Duration = Duration::from_millis(500);
+const STREAM_BUFFER: Duration = Duration::from_millis(800);
 const MAX_MESSAGE_LEN: usize = 4000;
+
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    Exec,
+    Raw,
+}
 
 pub struct TelegramTransport {
     pub bot_token: String,
@@ -26,7 +34,7 @@ impl Transport for TelegramTransport {
 
         info!(transport = "telegram", "starting long poll");
 
-        poll_and_respond(&client, &base_url, &self.chat_ids, &sessions).await;
+        poll_loop(&client, &base_url, &self.chat_ids, &sessions).await;
 
         Ok(())
     }
@@ -66,8 +74,34 @@ struct SendMessageRequest<'a> {
     parse_mode: Option<&'a str>,
 }
 
-/// Main loop: poll for messages, execute commands, send back output.
-async fn poll_and_respond(
+/// Per-chat state for mode tracking, session attachment, and raw streaming.
+struct ChatState {
+    mode: Mode,
+    /// Which session this chat is attached to. None = default session.
+    session_id: Option<String>,
+    /// Abort handle for the raw stream task (if running).
+    raw_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Default for ChatState {
+    fn default() -> Self {
+        Self {
+            mode: Mode::Exec,
+            session_id: None,
+            raw_task: None,
+        }
+    }
+}
+
+impl ChatState {
+    fn stop_raw(&mut self) {
+        if let Some(task) = self.raw_task.take() {
+            task.abort();
+        }
+    }
+}
+
+async fn poll_loop(
     client: &reqwest::Client,
     base_url: &str,
     allowed_chats: &[i64],
@@ -76,6 +110,8 @@ async fn poll_and_respond(
     let poll_url = format!("{}/getUpdates", base_url);
     let send_url = format!("{}/sendMessage", base_url);
     let mut offset: i64 = 0;
+    let chat_states: Arc<Mutex<HashMap<i64, ChatState>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
     loop {
         let resp = client
@@ -113,36 +149,242 @@ async fn poll_and_respond(
 
             let Some(msg) = update.message else { continue };
             let Some(text) = msg.text else { continue };
+            let chat_id = msg.chat.id;
 
-            if !allowed_chats.is_empty() && !allowed_chats.contains(&msg.chat.id) {
-                warn!(transport = "telegram", chat_id = msg.chat.id, "unauthorized chat");
+            if !allowed_chats.is_empty() && !allowed_chats.contains(&chat_id) {
+                warn!(transport = "telegram", chat_id, "unauthorized chat");
                 continue;
             }
 
-            let Ok(handle) = sessions.default_session().await else { continue };
-
-            // Execute the command and wait for output.
-            let output = match handle.execute(&text, SILENCE_TIMEOUT).await {
-                Ok(data) => data,
-                Err(e) => {
-                    error!(transport = "telegram", error = %e, "execute failed");
-                    continue;
-                }
+            // Helper: resolve the session handle for this chat.
+            let resolve_handle = |states: &HashMap<i64, ChatState>| -> Option<String> {
+                states.get(&chat_id).and_then(|s| s.session_id.clone())
             };
 
-            let raw = String::from_utf8_lossy(&output);
-            let clean = clean_output(&raw, &text);
+            // Handle commands.
+            if text.starts_with('/') {
+                let parts: Vec<&str> = text.splitn(2, ' ').collect();
+                let cmd = parts[0];
+                let arg = parts.get(1).map(|s| s.trim()).unwrap_or("");
 
-            if clean.trim().is_empty() {
-                // Send a minimal ack so the user knows it ran.
-                send_message(client, &send_url, msg.chat.id, "(no output)").await;
+                match cmd {
+                    "/raw" => {
+                        let session_id = {
+                            let states = chat_states.lock().await;
+                            resolve_handle(&states)
+                        };
+                        let handle = match get_handle(sessions, session_id.as_deref()).await {
+                            Some(h) => h,
+                            None => { send_message(client, &send_url, chat_id, "no session attached").await; continue; }
+                        };
+                        let mut states = chat_states.lock().await;
+                        let state = states.entry(chat_id).or_default();
+                        state.stop_raw();
+                        state.mode = Mode::Raw;
+
+                        let stream_client = client.clone();
+                        let stream_url = send_url.clone();
+                        let stream_handle = handle.clone();
+                        let task = tokio::spawn(async move {
+                            raw_stream_loop(&stream_client, &stream_url, chat_id, &stream_handle).await;
+                        });
+                        state.raw_task = Some(task);
+                        drop(states);
+
+                        let sid = handle.id.clone();
+                        send_message(client, &send_url, chat_id, &format!("raw mode on session {}", &sid[..8])).await;
+                    }
+                    "/exec" => {
+                        let mut states = chat_states.lock().await;
+                        let state = states.entry(chat_id).or_default();
+                        state.stop_raw();
+                        state.mode = Mode::Exec;
+                        drop(states);
+
+                        send_message(client, &send_url, chat_id, "exec mode").await;
+                    }
+                    "/sessions" => {
+                        let ids = sessions.list_sessions().await;
+                        let current = {
+                            let states = chat_states.lock().await;
+                            resolve_handle(&states)
+                        };
+                        let lines: Vec<String> = ids.iter().map(|id| {
+                            let marker = if current.as_deref() == Some(id.as_str()) { " ◀" } else { "" };
+                            format!("• {}{}", &id[..8.min(id.len())], marker)
+                        }).collect();
+                        let msg = if lines.is_empty() {
+                            "no sessions".to_string()
+                        } else {
+                            lines.join("\n")
+                        };
+                        send_message(client, &send_url, chat_id, &msg).await;
+                    }
+                    "/attach" => {
+                        if arg.is_empty() {
+                            send_message(client, &send_url, chat_id, "usage: /attach <session_id>").await;
+                            continue;
+                        }
+                        // Find session by prefix match.
+                        let ids = sessions.list_sessions().await;
+                        let matched: Vec<&String> = ids.iter().filter(|id| id.starts_with(arg)).collect();
+                        match matched.len() {
+                            0 => {
+                                send_message(client, &send_url, chat_id, &format!("no session matching '{}'", arg)).await;
+                            }
+                            1 => {
+                                let sid = matched[0].clone();
+                                let mut states = chat_states.lock().await;
+                                let state = states.entry(chat_id).or_default();
+                                state.stop_raw();
+                                state.mode = Mode::Exec;
+                                state.session_id = Some(sid.clone());
+                                drop(states);
+                                send_message(client, &send_url, chat_id, &format!("attached to {}", &sid[..8])).await;
+                            }
+                            _ => {
+                                let options: Vec<String> = matched.iter().map(|id| id[..8].to_string()).collect();
+                                send_message(client, &send_url, chat_id, &format!("ambiguous, matches: {}", options.join(", "))).await;
+                            }
+                        }
+                    }
+                    "/new" => {
+                        match sessions.create_session().await {
+                            Ok(handle) => {
+                                let sid = handle.id.clone();
+                                let mut states = chat_states.lock().await;
+                                let state = states.entry(chat_id).or_default();
+                                state.stop_raw();
+                                state.mode = Mode::Exec;
+                                state.session_id = Some(sid.clone());
+                                drop(states);
+                                send_message(client, &send_url, chat_id, &format!("created and attached to {}", &sid[..8])).await;
+                            }
+                            Err(e) => {
+                                send_message(client, &send_url, chat_id, &format!("failed: {}", e)).await;
+                            }
+                        }
+                    }
+                    "/detach" => {
+                        let mut states = chat_states.lock().await;
+                        let state = states.entry(chat_id).or_default();
+                        state.stop_raw();
+                        state.session_id = None;
+                        state.mode = Mode::Exec;
+                        drop(states);
+                        send_message(client, &send_url, chat_id, "detached — using default session").await;
+                    }
+                    "/help" => {
+                        send_message(client, &send_url, chat_id, concat!(
+                            "hermytt commands:\n",
+                            "/exec — command → response mode (default)\n",
+                            "/raw — live stream mode\n",
+                            "/sessions — list sessions\n",
+                            "/attach <id> — attach to a session\n",
+                            "/new — create + attach new session\n",
+                            "/detach — back to default session\n",
+                            "/help — this message",
+                        )).await;
+                    }
+                    _ => {
+                        send_message(client, &send_url, chat_id, "unknown command — /help").await;
+                    }
+                }
                 continue;
             }
 
-            for chunk in chunk_message(&clean) {
-                let formatted = format!("```\n{}\n```", chunk);
-                send_message(client, &send_url, msg.chat.id, &formatted).await;
+            // Regular input — resolve session and dispatch.
+            let (session_id, mode) = {
+                let states = chat_states.lock().await;
+                let state = states.get(&chat_id);
+                (
+                    state.and_then(|s| s.session_id.clone()),
+                    state.map(|s| s.mode).unwrap_or(Mode::Exec),
+                )
+            };
+
+            let Some(handle) = get_handle(sessions, session_id.as_deref()).await else {
+                send_message(client, &send_url, chat_id, "session not found").await;
+                continue;
+            };
+
+            match mode {
+                Mode::Exec => {
+                    handle_exec(client, &send_url, chat_id, &handle, &text).await;
+                }
+                Mode::Raw => {
+                    let mut input = text.into_bytes();
+                    if !input.ends_with(b"\n") {
+                        input.push(b'\n');
+                    }
+                    if let Err(e) = handle.stdin_tx.send(input).await {
+                        error!(transport = "telegram", error = %e, "stdin send failed");
+                    }
+                }
             }
+        }
+    }
+}
+
+/// Resolve a session handle — by ID if specified, otherwise default.
+async fn get_handle(
+    sessions: &Arc<SessionManager>,
+    session_id: Option<&str>,
+) -> Option<hermytt_core::SessionHandle> {
+    match session_id {
+        Some(id) => sessions.get_session(id).await,
+        None => sessions.default_session().await.ok(),
+    }
+}
+
+async fn handle_exec(
+    client: &reqwest::Client,
+    send_url: &str,
+    chat_id: i64,
+    handle: &hermytt_core::SessionHandle,
+    cmd: &str,
+) {
+    let output = match handle.execute(cmd, SILENCE_TIMEOUT).await {
+        Ok(data) => data,
+        Err(e) => {
+            error!(transport = "telegram", error = %e, "execute failed");
+            return;
+        }
+    };
+
+    let raw = String::from_utf8_lossy(&output);
+    let clean = clean_output(&raw, cmd);
+
+    if clean.trim().is_empty() {
+        send_message(client, send_url, chat_id, "(no output)").await;
+        return;
+    }
+
+    for chunk in chunk_message(&clean) {
+        let formatted = format!("```\n{}\n```", chunk);
+        send_message(client, send_url, chat_id, &formatted).await;
+    }
+}
+
+/// Continuously stream raw PTY output to a Telegram chat.
+async fn raw_stream_loop(
+    client: &reqwest::Client,
+    send_url: &str,
+    chat_id: i64,
+    handle: &hermytt_core::SessionHandle,
+) {
+    let mut output = handle.subscribe_buffered(STREAM_BUFFER);
+
+    while let Some(data) = output.recv().await {
+        let raw = String::from_utf8_lossy(&data);
+        let text = strip_ansi(&raw);
+        if text.trim().is_empty() {
+            continue;
+        }
+
+        for chunk in chunk_message(&text) {
+            let formatted = format!("```\n{}\n```", chunk);
+            send_message(client, send_url, chat_id, &formatted).await;
         }
     }
 }
@@ -154,18 +396,15 @@ async fn send_message(client: &reqwest::Client, url: &str, chat_id: i64, text: &
         parse_mode: Some("Markdown"),
     };
     if let Err(e) = client.post(url).json(&req).send().await {
-        error!(transport = "telegram", error = %e, "failed to send message");
+        error!(transport = "telegram", error = %e, "send failed");
     }
 }
 
 /// Clean PTY output for display: strip ANSI, remove the echoed command, remove prompt lines.
-pub fn clean_output(raw: &str, command: &str) -> String {
+pub fn clean_output(raw: &str, _command: &str) -> String {
     let stripped = strip_ansi(raw);
-
     let lines: Vec<&str> = stripped.lines().collect();
 
-    // First line is always the echoed command — skip it.
-    // Last line(s) are usually the prompt — skip those too.
     lines
         .iter()
         .skip(1) // skip echoed command
