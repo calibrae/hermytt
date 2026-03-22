@@ -380,15 +380,16 @@ async fn handle_ws_socket(
         tokio::select! {
             result = output_rx.recv() => {
                 match result {
+                    Ok(data) if data == hermytt_core::session::PTY_EXIT_SENTINEL => {
+                        // PTY exited — send exit signal to client.
+                        let _ = socket.send(Message::text("{\"exit\":true}")).await;
+                        break;
+                    }
                     Ok(data) => {
                         let text = String::from_utf8_lossy(&data).to_string();
                         if socket.send(Message::text(text)).await.is_err() { break; }
                     }
-                    Err(_) => {
-                        // PTY closed — send exit signal to client.
-                        let _ = socket.send(Message::text("{\"exit\":true}")).await;
-                        break;
-                    }
+                    Err(_) => break,
                 }
             }
             msg = socket.recv() => {

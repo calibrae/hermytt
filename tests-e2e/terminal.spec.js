@@ -125,3 +125,44 @@ test.describe('Terminal', () => {
     expect(errors.length).toBe(0);
   });
 });
+
+test.describe('Session lifecycle', () => {
+
+  test('exit closes session and shows farewell', async ({ page }) => {
+    const logs = [];
+    page.on('console', msg => logs.push(msg.text()));
+
+    await page.goto(URL);
+    await page.waitForTimeout(3000);
+
+    // Verify connected
+    const status = await page.$eval('#status-text', el => el.textContent);
+    expect(status).not.toBe('ready');
+
+    // Count tabs before
+    const tabsBefore = await page.$$eval('.tab[data-id]', tabs => tabs.length);
+    expect(tabsBefore).toBe(1);
+
+    // Send 'exit' via REST stdin endpoint (more reliable than keyboard in headless)
+    const sessionsRes = await page.request.get('/sessions', {
+      headers: { 'X-Hermytt-Key': TOKEN },
+    });
+    const sessionsData = await sessionsRes.json();
+    const sessionId = sessionsData.sessions[0]?.id;
+
+    await page.request.post(`/session/${sessionId}/stdin`, {
+      headers: { 'X-Hermytt-Key': TOKEN, 'Content-Type': 'application/json' },
+      data: { input: 'exit' },
+    });
+
+    // Wait for PTY to die, farewell message, and tab removal
+    await page.waitForTimeout(5000);
+
+    // Check canvas had the farewell message rendered (or tab was removed)
+    const tabsAfter = await page.$$eval('.tab[data-id]', tabs => tabs.length);
+    console.log('Tabs before:', tabsBefore, 'after:', tabsAfter);
+    console.log('Logs:', logs.filter(l => l.includes('hermytt')));
+    expect(tabsAfter).toBe(0);
+  });
+
+});

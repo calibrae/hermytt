@@ -9,6 +9,9 @@ use tracing::{error, info, warn};
 
 pub type SessionId = String;
 
+/// Sent through the broadcast channel when the PTY process exits.
+pub const PTY_EXIT_SENTINEL: &[u8] = b"\x1b[HERMYTT_EXIT]";
+
 #[derive(Clone)]
 pub struct SessionHandle {
     pub id: SessionId,
@@ -190,12 +193,12 @@ impl Session {
                 match master_reader.read(&mut buf) {
                     Ok(0) => {
                         info!(session = %session_id, "PTY closed");
+                        let _ = output_tx.send(PTY_EXIT_SENTINEL.to_vec());
                         break;
                     }
                     Ok(n) => {
                         let data = buf[..n].to_vec();
                         if let Ok(text) = std::str::from_utf8(&data) {
-                            // H2 fix: std::sync::Mutex — never held across await, safe in spawn_blocking.
                             if let Ok(mut sb) = scrollback.lock() {
                                 sb.push(text);
                             }
@@ -204,6 +207,7 @@ impl Session {
                     }
                     Err(e) => {
                         error!(session = %session_id, error = %e, "PTY read error");
+                        let _ = output_tx.send(PTY_EXIT_SENTINEL.to_vec());
                         break;
                     }
                 }
