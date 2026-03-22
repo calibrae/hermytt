@@ -126,6 +126,7 @@
   <div class="left">
     <span class="name">hermytt</span>
     <a href="/admin">admin</a>
+    <span id="highlight-toggle" style="cursor:pointer;color:#4a4a6e;transition:color 0.15s" title="syntax highlighting">&#x2728;</span>
   </div>
   <span><span class="dot" id="status"></span><span id="status-text">ready</span></span>
 </div>
@@ -140,15 +141,27 @@
   </form>
 </div>
 <script type="module">
-import init, { Terminal } from '/vendor/crytter_wasm.js';
+import initCrytter, { Terminal } from '/vendor/crytter_wasm.js';
+import initPrytty, { highlight_safe } from '/vendor/prytty_wasm.js';
 
 try {
-  await init('/vendor/crytter_wasm_bg.wasm');
-  console.log('[hermytt] WASM initialized');
+  await Promise.all([
+    initCrytter('/vendor/crytter_wasm_bg.wasm'),
+    initPrytty('/vendor/prytty_wasm_bg.wasm'),
+  ]);
+  console.log('[hermytt] WASM initialized (crytter + prytty)');
 } catch (e) {
   console.error('[hermytt] WASM init failed:', e);
   document.getElementById('status-text').textContent = 'WASM init failed';
 }
+
+let highlightEnabled = false;
+const hlToggle = document.getElementById('highlight-toggle');
+hlToggle.addEventListener('click', () => {
+  highlightEnabled = !highlightEnabled;
+  hlToggle.style.color = highlightEnabled ? '#fbbf24' : '#4a4a6e';
+  hlToggle.title = highlightEnabled ? 'syntax highlighting (on)' : 'syntax highlighting (off)';
+});
 
 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
@@ -254,7 +267,8 @@ function connectSession(session) {
       return;
     }
     // write() returns device query responses (DA1, CPR, etc.)
-    const response = session.term.write(e.data);
+    const data = highlightEnabled ? highlight_safe(e.data) : e.data;
+    const response = session.term.write(data);
     if (response) ws.send(response);
   };
 
