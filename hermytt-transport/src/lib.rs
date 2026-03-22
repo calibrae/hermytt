@@ -2,6 +2,7 @@ pub mod mqtt;
 pub mod rest;
 pub mod tcp;
 pub mod telegram;
+pub mod tls;
 
 use std::sync::Arc;
 

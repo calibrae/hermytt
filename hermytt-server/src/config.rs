@@ -23,6 +23,15 @@ pub struct ServerConfig {
     pub shell: String,
     #[serde(default = "default_scrollback")]
     pub scrollback: usize,
+    /// Directory for asciicast v2 recording files. Disabled if not set.
+    pub recording_dir: Option<String>,
+    /// Auto-record all sessions when recording_dir is set.
+    #[serde(default)]
+    pub auto_record: bool,
+    /// Path to TLS certificate PEM file. Both tls_cert and tls_key must be set to enable TLS.
+    pub tls_cert: Option<String>,
+    /// Path to TLS private key PEM file.
+    pub tls_key: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -31,6 +40,10 @@ impl Default for ServerConfig {
             bind: default_bind(),
             shell: default_shell(),
             scrollback: default_scrollback(),
+            recording_dir: None,
+            auto_record: false,
+            tls_cert: None,
+            tls_key: None,
         }
     }
 }

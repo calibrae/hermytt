@@ -2,6 +2,10 @@
 bind = "127.0.0.1"    # use 0.0.0.0 to expose to network
 shell = "/bin/zsh"
 scrollback = 1000
+# recording_dir = "/tmp/hermytt-recordings"  # asciicast v2 recordings directory
+# auto_record = false  # auto-record all sessions when recording_dir is set
+# tls_cert = "/path/to/cert.pem"
+# tls_key = "/path/to/key.pem"
 
 [auth]
 # token = "generate-with-hermytt-server-gen-token"

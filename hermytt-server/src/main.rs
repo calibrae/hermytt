@@ -10,6 +10,7 @@ use hermytt_transport::mqtt::MqttTransport;
 use hermytt_transport::rest::RestTransport;
 use hermytt_transport::tcp::TcpTransport;
 use hermytt_transport::telegram::TelegramTransport;
+use hermytt_transport::tls::TlsConfig;
 use tracing::{info, warn};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -109,6 +110,19 @@ async fn start_server(
         warn!("generate one with: hermytt-server gen-token");
     }
 
+    // Load TLS config if both cert and key are specified.
+    let tls_config = match (&config.server.tls_cert, &config.server.tls_key) {
+        (Some(cert), Some(key)) => {
+            let tls = TlsConfig::from_pem(cert, key)?;
+            info!(cert = %cert, key = %key, "TLS enabled");
+            Some(tls)
+        }
+        (Some(_), None) | (None, Some(_)) => {
+            anyhow::bail!("both tls_cert and tls_key must be set to enable TLS");
+        }
+        _ => None,
+    };
+
     info!(version = VERSION, "hermytt starting up");
 
     let sessions = Arc::new(SessionManager::new(
@@ -116,8 +130,26 @@ async fn start_server(
         config.server.scrollback,
     ));
 
+    let recording_dir = config
+        .server
+        .recording_dir
+        .as_ref()
+        .map(std::path::PathBuf::from);
+
     let default = sessions.create_session().await?;
     info!(session = %default.id, "default session ready");
+
+    // Auto-record the default session if configured.
+    if config.server.auto_record {
+        if let Some(ref dir) = recording_dir {
+            let recordings = std::sync::Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            ));
+            hermytt_transport::rest::auto_record_session(&default, dir, &recordings).await;
+        } else {
+            warn!("auto_record enabled but no recording_dir set — skipping");
+        }
+    }
 
     let mut tasks = Vec::new();
 
@@ -165,6 +197,8 @@ async fn start_server(
             shell: config.server.shell.clone(),
             transport_info: transport_info.clone(),
             config_path: config_path.map(String::from),
+            tls: tls_config.clone(),
+            recording_dir: config.server.recording_dir.as_ref().map(std::path::PathBuf::from),
         });
         let sessions = sessions.clone();
         tasks.push(tokio::spawn(async move {
@@ -195,6 +229,7 @@ async fn start_server(
             port: tcp_config.port,
             bind: config.server.bind.clone(),
             auth_token: auth_token.clone(),
+            tls: tls_config.clone(),
         });
         let sessions = sessions.clone();
         tasks.push(tokio::spawn(async move {

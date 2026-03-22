@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -7,17 +9,19 @@ use axum::Router;
 use axum::body::Body;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::extract::{Path, Query, State, WebSocketUpgrade};
-use axum::http::{Request, StatusCode};
+use axum::http::{Request, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Json};
 use axum::routing::{get, post};
-use hermytt_core::{BufferedOutput, SessionManager};
+use hermytt_core::{BufferedOutput, RecordingHandle, SessionManager};
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 use tower_http::cors::{Any, CorsLayer};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::Transport;
+use crate::tls::TlsConfig;
 
 pub struct RestTransport {
     pub port: u16,
@@ -26,6 +30,8 @@ pub struct RestTransport {
     pub shell: String,
     pub transport_info: Vec<TransportInfo>,
     pub config_path: Option<String>,
+    pub tls: Option<TlsConfig>,
+    pub recording_dir: Option<PathBuf>,
 }
 
 #[derive(Clone, Serialize)]
@@ -34,6 +40,9 @@ pub struct TransportInfo {
     pub endpoint: String,
 }
 
+/// Active recordings keyed by session ID.
+type RecordingMap = Arc<Mutex<HashMap<String, RecordingHandle>>>;
+
 #[derive(Clone)]
 struct AppState {
     sessions: Arc<SessionManager>,
@@ -41,6 +50,8 @@ struct AppState {
     shell: String,
     transport_info: Vec<TransportInfo>,
     config_path: Option<String>,
+    recording_dir: Option<PathBuf>,
+    recordings: RecordingMap,
 }
 
 #[derive(Deserialize)]
@@ -72,6 +83,8 @@ impl Transport for RestTransport {
             shell: self.shell.clone(),
             transport_info: self.transport_info.clone(),
             config_path: self.config_path.clone(),
+            recording_dir: self.recording_dir.clone(),
+            recordings: Arc::new(Mutex::new(HashMap::new())),
         };
 
         // API routes behind auth.
@@ -81,6 +94,10 @@ impl Transport for RestTransport {
             .route("/sessions", get(list_sessions))
             .route("/session/{id}/stdin", post(write_stdin))
             .route("/session/{id}/stdout", get(stream_stdout))
+            .route("/session/{id}/record", post(start_recording))
+            .route("/session/{id}/stop-record", post(stop_recording))
+            .route("/recordings", get(list_recordings))
+            .route("/recordings/{filename}", get(download_recording))
             .route("/stdin", post(write_stdin_default))
             .route("/stdout", get(stream_stdout_default))
             .route("/exec", post(exec_default))
@@ -110,10 +127,23 @@ impl Transport for RestTransport {
         let app = web.merge(api).merge(ws_routes).with_state(state).layer(cors);
 
         let addr = format!("{}:{}", self.bind, self.port);
-        info!(transport = "rest", addr = %addr, "listening");
+        let scheme = if self.tls.is_some() { "https" } else { "http" };
+        info!(transport = "rest", addr = %addr, scheme = scheme, "listening");
 
-        let listener = tokio::net::TcpListener::bind(&addr).await?;
-        axum::serve(listener, app).await?;
+        if let Some(ref tls) = self.tls {
+            let rustls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(
+                &tls.cert_path,
+                &tls.key_path,
+            )
+            .await?;
+            let socket_addr: std::net::SocketAddr = addr.parse()?;
+            axum_server::bind_rustls(socket_addr, rustls_config)
+                .serve(app.into_make_service())
+                .await?;
+        } else {
+            let listener = tokio::net::TcpListener::bind(&addr).await?;
+            axum::serve(listener, app).await?;
+        }
         Ok(())
     }
 
@@ -471,5 +501,163 @@ fn make_sse_stream(
             .interval(Duration::from_secs(15))
             .text("ping"),
     )
+}
+
+// --- Recording endpoints ---
+
+async fn start_recording(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let Some(recording_dir) = &state.recording_dir else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+
+    let Some(handle) = state.sessions.get_session(&id).await else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+
+    // Check if already recording.
+    {
+        let recordings = state.recordings.lock().await;
+        if recordings.contains_key(&id) {
+            return Ok(Json(serde_json::json!({
+                "error": "session is already being recorded"
+            })));
+        }
+    }
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let filename = format!("{}-{}.cast", id, timestamp);
+    let path = recording_dir.join(&filename);
+
+    match hermytt_core::start_recording(&handle, &path, 80, 24, Some(format!("session-{}", id)))
+        .await
+    {
+        Ok(rec_handle) => {
+            state.recordings.lock().await.insert(id.clone(), rec_handle);
+            info!(session = %id, file = %filename, "recording started via REST");
+            Ok(Json(serde_json::json!({
+                "status": "recording",
+                "filename": filename,
+            })))
+        }
+        Err(e) => {
+            error!(error = %e, "failed to start recording");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+async fn stop_recording(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let rec_handle = state.recordings.lock().await.remove(&id);
+    let Some(rec_handle) = rec_handle else {
+        return Ok(Json(serde_json::json!({
+            "error": "session is not being recorded"
+        })));
+    };
+
+    let filename = rec_handle
+        .path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    if let Err(e) = rec_handle.stop().await {
+        error!(error = %e, "failed to stop recording");
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    info!(session = %id, file = %filename, "recording stopped via REST");
+    Ok(Json(serde_json::json!({
+        "status": "stopped",
+        "filename": filename,
+    })))
+}
+
+async fn list_recordings(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let Some(recording_dir) = &state.recording_dir else {
+        return Ok(Json(serde_json::json!({ "recordings": [] })));
+    };
+
+    let entries = hermytt_core::list_recordings(recording_dir)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "failed to list recordings");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(serde_json::json!({ "recordings": entries })))
+}
+
+async fn download_recording(
+    State(state): State<AppState>,
+    Path(filename): Path<String>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let Some(recording_dir) = &state.recording_dir else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+
+    // Sanitize filename to prevent path traversal.
+    if filename.contains("..") || filename.contains('/') || filename.contains('\\') {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let path = recording_dir.join(&filename);
+    if !path.exists() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let data = tokio::fs::read(&path).await.map_err(|e| {
+        error!(error = %e, "failed to read recording file");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let disposition = format!("attachment; filename=\"{}\"", filename);
+    Ok((
+        [
+            (
+                header::CONTENT_TYPE,
+                "application/x-asciicast".to_string(),
+            ),
+            (header::CONTENT_DISPOSITION, disposition),
+        ],
+        data,
+    ))
+}
+
+/// Start auto-recording for a session. Called from server startup when auto_record is enabled.
+pub async fn auto_record_session(
+    handle: &hermytt_core::SessionHandle,
+    recording_dir: &std::path::Path,
+    recordings: &RecordingMap,
+) {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let filename = format!("{}-{}.cast", handle.id, timestamp);
+    let path = recording_dir.join(&filename);
+
+    match hermytt_core::start_recording(handle, &path, 80, 24, Some(format!("session-{}", handle.id)))
+        .await
+    {
+        Ok(rec_handle) => {
+            recordings.lock().await.insert(handle.id.clone(), rec_handle);
+            info!(session = %handle.id, file = %filename, "auto-recording started");
+        }
+        Err(e) => {
+            error!(session = %handle.id, error = %e, "failed to auto-record session");
+        }
+    }
 }
 

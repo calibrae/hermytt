@@ -4,16 +4,18 @@ use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
 use hermytt_core::SessionManager;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tracing::{error, info, warn};
 
 use crate::Transport;
+use crate::tls::TlsConfig;
 
 pub struct TcpTransport {
     pub port: u16,
     pub bind: String,
     pub auth_token: Option<String>,
+    pub tls: Option<TlsConfig>,
 }
 
 #[async_trait]
@@ -21,7 +23,8 @@ impl Transport for TcpTransport {
     async fn serve(self: Arc<Self>, sessions: Arc<SessionManager>) -> Result<()> {
         let addr = format!("{}:{}", self.bind, self.port);
         let listener = TcpListener::bind(&addr).await?;
-        info!(transport = "tcp", addr = %addr, "listening");
+        let tls_label = if self.tls.is_some() { " (TLS)" } else { "" };
+        info!(transport = "tcp", addr = %addr, "listening{}", tls_label);
 
         loop {
             let (stream, peer) = listener.accept().await?;
@@ -29,8 +32,26 @@ impl Transport for TcpTransport {
 
             let sessions = sessions.clone();
             let auth_token = self.auth_token.clone();
+            let tls = self.tls.clone();
+
             tokio::spawn(async move {
-                if let Err(e) = handle_connection(stream, sessions, auth_token).await {
+                let result = if let Some(tls) = tls {
+                    match tls.acceptor.accept(stream).await {
+                        Ok(tls_stream) => {
+                            let (reader, writer) = tokio::io::split(tls_stream);
+                            handle_connection(reader, writer, sessions, auth_token).await
+                        }
+                        Err(e) => {
+                            error!(transport = "tcp", peer = %peer, error = %e, "TLS handshake failed");
+                            return;
+                        }
+                    }
+                } else {
+                    let (reader, writer) = stream.into_split();
+                    handle_connection(reader, writer, sessions, auth_token).await
+                };
+
+                if let Err(e) = result {
                     error!(transport = "tcp", peer = %peer, error = %e, "connection error");
                 }
                 info!(transport = "tcp", peer = %peer, "client disconnected");
@@ -43,12 +64,16 @@ impl Transport for TcpTransport {
     }
 }
 
-async fn handle_connection(
-    stream: tokio::net::TcpStream,
+async fn handle_connection<R, W>(
+    reader: R,
+    mut writer: W,
     sessions: Arc<SessionManager>,
     auth_token: Option<String>,
-) -> Result<()> {
-    let (reader, mut writer) = stream.into_split();
+) -> Result<()>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
     let mut reader = BufReader::new(reader);
 
     // First-line token auth.

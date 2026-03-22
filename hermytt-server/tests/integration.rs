@@ -27,6 +27,8 @@ async fn start_server() -> String {
             endpoint: format!("127.0.0.1:{}", port),
         }],
         config_path: None,
+        tls: None,
+        recording_dir: None,
     });
 
     let sessions_clone = sessions.clone();
@@ -58,7 +60,7 @@ async fn web_terminal_page_loads() {
     assert_eq!(res.status(), 200);
     let body = res.text().await.unwrap();
     assert!(body.contains("hermytt"));
-    assert!(body.contains("xterm"));
+    assert!(body.contains("crytter"));
 }
 
 #[tokio::test]
