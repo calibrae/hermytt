@@ -1,4 +1,11 @@
 /target
 node_modules/
 test-results/
+inbox/
+.claude/
 hermytt-test.toml
+VAULT.md
+resume.sh
+*.swp
+*.swo
+.DS_Store

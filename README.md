@@ -1,91 +1,102 @@
 # hermytt
 
-Transport-agnostic terminal multiplexer. One PTY session, any client that speaks text is a terminal.
+Transport-agnostic terminal multiplexer. One PTY, any client that speaks text.
 
 ```
                     ┌─── REST API (/stdin, /stdout SSE, /exec)
-                    ├─── WebSocket (bidirectional, xterm.js web UI)
-PTY (bash/zsh) ────┼─── MQTT (hermytt/{id}/in, hermytt/{id}/out)
+                    ├─── WebSocket (full terminal, crytter WASM UI)
+PTY (bash/zsh) ────┼─── MQTT (command → response)
                     ├─── Raw TCP (netcat-compatible)
-                    └─── Telegram (bot, direct exec)
+                    └─── Telegram bot (command → response)
 ```
 
 The hermit lives alone. But he talks to everyone.
 
+## Install
+
+```bash
+cargo install --path hermytt-server
+```
+
+Or build from source:
+
+```bash
+cargo build --release
+# → target/release/hermytt-server (3MB)
+```
+
+Single static binary. No runtime dependencies. Web UI embedded.
+
 ## Quick start
 
 ```bash
-# generate a config
+# generate config + auth token
 hermytt-server example-config > hermytt.toml
-
-# generate an auth token and paste it into [auth] token =
 hermytt-server gen-token
+# paste token into hermytt.toml under [auth]
 
 # start
 hermytt-server start -c hermytt.toml
 ```
 
-Open `http://localhost:7777?token=YOUR_TOKEN` for the web terminal.
-Open `http://localhost:7777/admin?token=YOUR_TOKEN` for the admin dashboard.
+Open `http://localhost:7777?token=YOUR_TOKEN` — full terminal in your browser.
 
-## Two execution models
+Open `http://localhost:7777/admin?token=YOUR_TOKEN` — manage sessions and transports.
 
-**Stream transports** (WebSocket, TCP) pipe raw PTY I/O. Full terminal — colors, tab completion, TUIs, everything. Use the web UI or netcat.
+## Two modes
 
-**Request transports** (REST `/exec`, MQTT, Telegram) run commands directly via `sh -c`, bypassing the PTY entirely. Clean stdout/stderr/exit code, no ANSI junk. Use for automation, bots, quick commands.
+**Stream** (WebSocket, TCP) — full interactive terminal. Colors, tab completion, TUIs, vim, htop. Use the web UI or netcat.
 
-REST also has stream endpoints (`/stdin`, `/stdout` SSE) for when you need the PTY.
+**Exec** (REST `/exec`, MQTT, Telegram) — run a command, get stdout/stderr/exit code. Clean, fast, no PTY overhead. Use for automation and bots.
 
 ## Transports
 
-| Transport | Mode | Auth | Use case |
-|-----------|------|------|----------|
-| REST + WS | stream + exec | `X-Hermytt-Key` header or `?token=` | Web UI, API |
-| MQTT | exec | Broker auth | IoT, home automation |
-| TCP | stream | First-line token | netcat, scripts |
-| Telegram | exec | chat_id whitelist | Quick commands from phone |
+| Transport | Mode | Auth |
+|-----------|------|------|
+| REST + WebSocket | both | `X-Hermytt-Key` header |
+| MQTT | exec | broker auth |
+| TCP | stream | first-line token |
+| Telegram | exec | chat_id whitelist |
 
 ### REST
 
 ```bash
-# execute a command (direct, no PTY)
+# execute a command (no PTY, clean output)
 curl -X POST http://host:7777/exec \
-  -H 'Content-Type: application/json' \
   -H 'X-Hermytt-Key: TOKEN' \
+  -H 'Content-Type: application/json' \
   -d '{"input": "uptime"}'
-# returns: {"stdout": "...", "stderr": "", "exit_code": 0}
+# → {"stdout":"...","stderr":"","exit_code":0}
 
-# stream: send to PTY stdin
+# PTY stream: send to stdin
 curl -X POST http://host:7777/stdin \
-  -H 'Content-Type: application/json' \
   -H 'X-Hermytt-Key: TOKEN' \
+  -H 'Content-Type: application/json' \
   -d '{"input": "ls -la"}'
 
-# stream: SSE output from PTY
-curl -N http://host:7777/stdout?token=TOKEN
+# PTY stream: SSE output
+curl -N http://host:7777/stdout -H 'X-Hermytt-Key: TOKEN'
 
 # sessions
-curl -X POST http://host:7777/session?token=TOKEN     # create
-curl http://host:7777/sessions?token=TOKEN              # list
-
-# server info
-curl http://host:7777/info?token=TOKEN
+curl -X POST http://host:7777/session -H 'X-Hermytt-Key: TOKEN'
+curl http://host:7777/sessions -H 'X-Hermytt-Key: TOKEN'
 ```
 
 ### WebSocket
 
 ```
-ws://host:7777/ws?token=TOKEN             # default session
-ws://host:7777/ws/SESSION_ID?token=TOKEN  # specific session
+ws://host:7777/ws              → default session
+ws://host:7777/ws/SESSION_ID   → specific session
 ```
+
+First message: send auth token. Server replies `auth:ok`.
+
+Resize: send `{"resize":[cols,rows]}` as a text message.
 
 ### MQTT
 
 ```bash
-# send command (direct exec, response on /out)
 mosquitto_pub -t hermytt/default/in -m "uptime"
-
-# receive output
 mosquitto_sub -t hermytt/default/out
 ```
 
@@ -93,21 +104,21 @@ mosquitto_sub -t hermytt/default/out
 
 ```bash
 nc host 7779
-# type token, press enter, then you're in a full terminal
+# type token, press enter, full terminal
 ```
 
 ### Telegram
 
-Send any text to the bot — runs as a shell command, replies with output in a code block.
+Send any text to the bot — runs as shell command, replies with output.
 
-### Web UI
+## Web UI
 
-- `/` — tabbed xterm.js terminal (full PTY)
-- `/admin` — admin dashboard (sessions, transports, quick exec)
+The terminal uses [crytter](https://github.com/cali/crytter) — a Rust/WASM terminal emulator compiled to 86KB. No xterm.js, no JavaScript terminal parsing. Zero external dependencies.
+
+- `/` — tabbed terminal (full PTY, keyboard shortcuts)
+- `/admin` — session management, transport config, quick exec
 - Mobile: input bar with Enter/Ctrl-C/Tab buttons
-- **Ctrl+Shift+T** — new tab
-- **Ctrl+Shift+W** — close tab
-- **Ctrl+Shift+[/]** — switch tabs
+- `Ctrl+Shift+T` new tab, `Ctrl+Shift+W` close, `Ctrl+Shift+[/]` switch
 
 ## Config
 
@@ -137,7 +148,7 @@ bot_token = "your-bot-token"
 chat_ids = [123456789]
 ```
 
-All transports are optional — only include the ones you want.
+All transports optional. Only include what you need.
 
 ## CLI
 
@@ -150,28 +161,40 @@ hermytt-server example-config
 ## Architecture
 
 ```
-hermytt-core/         PTY sessions, output buffering, direct exec, platform abstraction
+hermytt-core/         PTY sessions, output buffering, direct exec, platform
 hermytt-transport/    Transport trait + REST/WS, MQTT, TCP, Telegram
-hermytt-web/          Web UI (terminal + admin dashboard)
-hermytt-server/       Config, CLI, transport wiring
+hermytt-web/          Web UI (terminal + admin), crytter WASM
+hermytt-server/       Config, CLI, wiring
 hermytt-cli/          Client CLI (planned)
 ```
 
 ## Testing
 
 ```bash
-cargo test            # 48 tests: unit + integration
+cargo test              # 52 unit + integration tests
+npx playwright test     # browser e2e tests
 ```
 
-## Building
+Integration tests use embedded MQTT broker — no external infra.
+
+## Cross-compile
 
 ```bash
-cargo build --release
-# binary at target/release/hermytt-server (~2MB)
+# Linux static binary (from macOS)
+./deploy.sh
 ```
 
-Works on macOS and Linux. Windows support via `portable-pty` (defaults to PowerShell).
+Requires `musl-cross` (`brew install musl-cross`).
+
+## Security
+
+- Auth on all transports (header, first-message WS, first-line TCP, broker/chat whitelist)
+- Default bind `127.0.0.1`
+- Exec: 30s timeout, 1MB output cap, 8 concurrent max
+- Session limit (default 16)
+- Token stored in sessionStorage, stripped from URL
+- Three OWASP audit passes
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).

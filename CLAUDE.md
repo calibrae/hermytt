@@ -90,7 +90,7 @@ port = 7778
 
 [transport.mqtt]
 enabled = true
-broker = "10.11.0.7"
+broker = "mqtt.example.com"
 port = 1883
 user = "mqtt"
 # password from env or Vault
@@ -102,7 +102,7 @@ port = 7779
 [transport.telegram]
 enabled = false
 # bot_token from env or Vault
-# chat_id = "1089362604"
+# chat_id = "123456789"
 ```
 
 ## Security
