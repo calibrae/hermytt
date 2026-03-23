@@ -1003,7 +1003,7 @@ After=network.target
 [Service]
 Type=simple
 User=$(whoami)
-ExecStart=$INSTALL_DIR/shytti serve -c $INSTALL_DIR/shytti.toml
+ExecStart=$INSTALL_DIR/shytti daemon -c $INSTALL_DIR/shytti.toml
 Restart=always
 RestartSec=2
 Environment=HERMYTT_URL=$HERMYTT_URL
