@@ -59,6 +59,7 @@ struct AppState {
     files_dir: Option<PathBuf>,
     max_upload_size: usize,
     registry: Arc<ServiceRegistry>,
+    control_hub: Arc<hermytt_core::ControlHub>,
 }
 
 #[derive(Deserialize)]
@@ -95,6 +96,7 @@ impl Transport for RestTransport {
             files_dir: self.files_dir.clone(),
             max_upload_size: self.max_upload_size,
             registry: Arc::new(ServiceRegistry::new()),
+            control_hub: hermytt_core::ControlHub::new(),
         };
 
         // API routes behind auth.
@@ -122,6 +124,9 @@ impl Transport for RestTransport {
             .route("/registry", get(registry_list))
             .route("/registry/announce", post(registry_announce))
             .route("/registry/{name}", axum::routing::delete(registry_unregister))
+            // Host management (shytti instances).
+            .route("/hosts", get(list_hosts))
+            .route("/hosts/{name}/spawn", post(spawn_on_host))
             // Bootstrap scripts for family members.
             .route("/bootstrap/shytti", get(bootstrap_shytti))
             // Internal session API (for Shytti and external orchestrators).
@@ -136,7 +141,8 @@ impl Transport for RestTransport {
         let ws_routes = Router::new()
             .route("/ws", get(ws_handler_default))
             .route("/ws/{id}", get(ws_handler))
-            .route("/internal/session/{id}/pipe", get(internal_pipe_handler));
+            .route("/internal/session/{id}/pipe", get(internal_pipe_handler))
+            .route("/control", get(control_ws_handler));
 
         let cors = CorsLayer::new()
             .allow_origin(Any)
@@ -1149,5 +1155,169 @@ async fn handle_internal_pipe(
     }
 
     info!(session = %session_id, "internal pipe disconnected");
+}
+
+// --- Control WS (shytti ↔ hermytt persistent control channel) ---
+
+async fn control_ws_handler(
+    State(state): State<AppState>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| async move {
+        handle_control_ws(socket, state).await;
+    })
+}
+
+async fn handle_control_ws(mut socket: WebSocket, state: AppState) {
+    use hermytt_core::control::{ControlMessage, ShyttiMessage};
+
+    // First message: auth + identification.
+    let (name, _role) = match tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        socket.recv(),
+    ).await {
+        Ok(Some(Ok(Message::Text(text)))) => {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.as_str()) {
+                let auth = val.get("auth").and_then(|v| v.as_str()).unwrap_or("");
+                let name = val.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let role = val.get("role").and_then(|v| v.as_str()).unwrap_or("shell").to_string();
+
+                // Verify auth token.
+                if let Some(expected) = &state.auth_token {
+                    if auth != expected {
+                        warn!(name = %name, "control WS: auth failed");
+                        let _ = socket.send(Message::text(r#"{"status":"unauthorized"}"#)).await;
+                        return;
+                    }
+                }
+
+                let _ = socket.send(Message::text(r#"{"status":"ok"}"#)).await;
+                (name, role)
+            } else {
+                return;
+            }
+        }
+        _ => return,
+    };
+
+    if name.is_empty() {
+        return;
+    }
+
+    // Create channel for sending control messages to this shytti.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<ControlMessage>(64);
+
+    // Register with the control hub.
+    state.control_hub.register(name.clone(), serde_json::Value::Null, tx).await;
+
+    // Also register in the service registry for the admin dashboard.
+    let svc_info = hermytt_core::registry::ServiceInfo {
+        name: name.clone(),
+        role: hermytt_core::registry::ServiceRole::Shell,
+        endpoint: "control-ws".to_string(),
+        status: hermytt_core::registry::ServiceStatus::Connected,
+        last_seen_instant: None,
+        last_seen: 0,
+        meta: serde_json::Value::Null,
+    };
+    state.registry.register(svc_info).await;
+
+    info!(name = %name, "control WS established");
+
+    loop {
+        tokio::select! {
+            // Messages from shytti.
+            msg = socket.recv() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        if let Ok(shytti_msg) = serde_json::from_str::<ShyttiMessage>(text.as_str()) {
+                            match shytti_msg {
+                                ShyttiMessage::Heartbeat { meta } => {
+                                    state.control_hub.heartbeat(&name, meta.clone()).await;
+                                    // Update registry too.
+                                    let svc = hermytt_core::registry::ServiceInfo {
+                                        name: name.clone(),
+                                        role: hermytt_core::registry::ServiceRole::Shell,
+                                        endpoint: "control-ws".to_string(),
+                                        status: hermytt_core::registry::ServiceStatus::Connected,
+                                        last_seen_instant: None,
+                                        last_seen: 0,
+                                        meta,
+                                    };
+                                    state.registry.register(svc).await;
+                                }
+                                ShyttiMessage::SpawnOk { req_id, shell_id, session_id } => {
+                                    info!(name = %name, session = %session_id, "spawn ok");
+                                    state.control_hub.handle_spawn_ok(&req_id, shell_id, session_id).await;
+                                }
+                                ShyttiMessage::SpawnErr { req_id, error } => {
+                                    warn!(name = %name, error = %error, "spawn failed");
+                                    state.control_hub.handle_spawn_err(&req_id, error).await;
+                                }
+                                ShyttiMessage::KillOk { shell_id } => {
+                                    info!(name = %name, shell = %shell_id, "kill ok");
+                                }
+                                ShyttiMessage::ShellDied { shell_id } => {
+                                    info!(name = %name, shell = %shell_id, "shell died");
+                                }
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    _ => {}
+                }
+            }
+            // Messages to shytti (from hermytt).
+            cmd = rx.recv() => {
+                match cmd {
+                    Some(msg) => {
+                        let json = serde_json::to_string(&msg).unwrap_or_default();
+                        if socket.send(Message::text(json)).await.is_err() { break; }
+                    }
+                    None => break,
+                }
+            }
+        }
+    }
+
+    // Cleanup.
+    state.control_hub.unregister(&name).await;
+    state.registry.unregister(&name).await;
+    info!(name = %name, "control WS closed");
+}
+
+// --- Host management ---
+
+async fn list_hosts(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let hosts = state.control_hub.list().await;
+    Json(serde_json::json!({
+        "hosts": hosts.iter().map(|(name, meta)| serde_json::json!({
+            "name": name,
+            "meta": meta,
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+#[derive(Deserialize)]
+struct SpawnOnHostBody {
+    shell: Option<String>,
+    cwd: Option<String>,
+}
+
+async fn spawn_on_host(
+    State(state): State<AppState>,
+    Path(host): Path<String>,
+    body: Option<Json<SpawnOnHostBody>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let (shell, cwd) = body.map(|b| (b.shell.clone(), b.cwd.clone())).unwrap_or((None, None));
+
+    match state.control_hub.spawn(&host, shell, cwd).await {
+        Ok(result) => Ok(Json(serde_json::json!({
+            "session_id": result.session_id,
+            "shell_id": result.shell_id,
+            "host": host,
+        }))),
+        Err(e) => Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": e})))),
+    }
 }
 
