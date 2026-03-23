@@ -1191,7 +1191,7 @@ async fn handle_control_ws(mut socket: WebSocket, state: AppState) {
                     }
                 }
 
-                let _ = socket.send(Message::text(r#"{"status":"ok"}"#)).await;
+                let _ = socket.send(Message::text(r#"{"type":"auth_ok","status":"ok"}"#)).await;
                 (name, role)
             } else {
                 return;
