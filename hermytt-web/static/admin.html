@@ -253,9 +253,18 @@ async function refreshSessions() {
     <tr>
       <td><span class="dot dot-on"></span></td>
       <td>${esc(s.id.slice(0,8))}</td>
-      <td style="text-align:right"><a href="/#${encodeURIComponent(s.id)}" class="btn">open</a></td>
+      <td style="text-align:right;display:flex;gap:4px;justify-content:flex-end">
+        <a href="/#${encodeURIComponent(s.id)}" class="btn">open</a>
+        <button class="btn btn-red" onclick="killSession('${esc(s.id)}')">kill</button>
+      </td>
     </tr>
   `).join('') || '<tr><td colspan="3" class="empty-row">no sessions</td></tr>';
+}
+
+async function killSession(id) {
+  if (!confirm('Kill session ' + id.slice(0,8) + '?')) return;
+  await fetch('/internal/session/' + encodeURIComponent(id), { method: 'DELETE', headers: authHeaders() });
+  refreshSessions();
 }
 
 // --- Info ---

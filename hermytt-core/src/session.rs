@@ -343,11 +343,15 @@ impl SessionManager {
         Ok(handle)
     }
 
-    /// Unregister a session (managed or PTY).
+    /// Unregister a session (managed or PTY). Sends exit sentinel to notify connected clients.
     pub async fn unregister_session(&self, id: &str) -> Result<()> {
         let mut sessions = self.sessions.write().await;
         let removed = sessions.remove(id);
         anyhow::ensure!(removed.is_some(), "session not found");
+        // Send exit sentinel so browsers show the farewell message.
+        if let Some(session) = &removed {
+            let _ = session.handle.output_tx.send(PTY_EXIT_SENTINEL.to_vec());
+        }
         info!(session = %id, "session unregistered");
         Ok(())
     }
