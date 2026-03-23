@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hermytt</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;700&display=swap');
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #060610;
+  color: #c8c8e0;
+  font-family: 'JetBrains Mono', monospace;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.login {
+  width: 340px;
+  padding: 32px;
+  background: #0c0c1a;
+  border: 1px solid #1a1a3e;
+  border-radius: 8px;
+}
+.login h1 {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 4px;
+  letter-spacing: 1px;
+}
+.login .sub {
+  font-size: 11px;
+  color: #3a3a5e;
+  margin-bottom: 24px;
+}
+.login input {
+  width: 100%;
+  background: #060610;
+  border: 1px solid #1a1a3e;
+  color: #c8c8e0;
+  padding: 10px 12px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  border-radius: 4px;
+  outline: none;
+  margin-bottom: 12px;
+}
+.login input:focus { border-color: #4a8af4; }
+.login input::placeholder { color: #2a2a4e; }
+.login button {
+  width: 100%;
+  background: #1e3a5f;
+  border: 1px solid #1e3a5f;
+  color: #4a8af4;
+  padding: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+  letter-spacing: 0.5px;
+}
+.login button:hover { background: #2563eb; color: #fff; }
+.login .err {
+  font-size: 11px;
+  color: #f06060;
+  margin-top: 8px;
+  display: none;
+}
+</style>
+</head>
+<body>
+<div class="login">
+  <h1>HERMYTT</h1>
+  <div class="sub">the hermit tty</div>
+  <form id="form">
+    <input type="password" id="token" placeholder="auth token" autofocus autocomplete="off">
+    <button type="submit">connect</button>
+  </form>
+  <div class="err" id="err">invalid token</div>
+</div>
+<script>
+// If already authed, redirect.
+if (sessionStorage.getItem('hermytt-token')) {
+  location.href = new URLSearchParams(location.search).get('next') || '/';
+}
+
+document.getElementById('form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const token = document.getElementById('token').value.trim();
+  if (!token) return;
+
+  // Validate by hitting /info.
+  try {
+    const res = await fetch('/info', { headers: { 'X-Hermytt-Key': token } });
+    if (res.ok) {
+      sessionStorage.setItem('hermytt-token', token);
+      location.href = new URLSearchParams(location.search).get('next') || '/';
+    } else {
+      document.getElementById('err').style.display = 'block';
+    }
+  } catch(e) {
+    document.getElementById('err').textContent = 'connection failed';
+    document.getElementById('err').style.display = 'block';
+  }
+});
+</script>
+</body>
+</html>

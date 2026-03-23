@@ -117,7 +117,7 @@ tr:hover td { background: rgba(74,138,244,0.03); }
 <body>
 <div id="hdr">
   <div class="logo">HERMYTT <span>command center</span></div>
-  <nav><a href="/">terminal</a> <a href="/admin">admin</a></nav>
+  <nav><a href="/">terminal</a> <a href="/admin">admin</a> <a href="#" onclick="sessionStorage.removeItem('hermytt-token');location.href='/login'" style="color:#5a5a7e">logout</a></nav>
 </div>
 <div id="strip">
   <div class="s-item"><div class="pulse"></div> <span id="s-status">connecting</span></div>
@@ -190,9 +190,9 @@ tr:hover td { background: rgba(74,138,244,0.03); }
 </div>
 
 <script>
-const urlToken = new URLSearchParams(location.search).get('token');
-if (urlToken) { sessionStorage.setItem('hermytt-token', urlToken); const u = new URL(location); u.searchParams.delete('token'); history.replaceState(null,'',u); }
+// Auth: redirect to login if no token.
 const TOKEN = sessionStorage.getItem('hermytt-token') || '';
+if (!TOKEN) { location.href = '/login?next=' + encodeURIComponent(location.pathname); }
 function authHeaders() { const h = {'Content-Type':'application/json'}; if (TOKEN) h['X-Hermytt-Key'] = TOKEN; return h; }
 const esc = s => { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; };
 

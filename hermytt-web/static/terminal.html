@@ -126,6 +126,7 @@
   <div class="left">
     <span class="name">hermytt</span>
     <a href="/admin">admin</a>
+    <a href="#" onclick="sessionStorage.removeItem('hermytt-token');location.href='/login'" style="color:#4a4a6e">logout</a>
     <span id="highlight-toggle" style="cursor:pointer;color:#4a4a6e;transition:color 0.15s" title="syntax highlighting">&#x2728;</span>
   </div>
   <span><span class="dot" id="status"></span><span id="status-text">ready</span></span>
@@ -165,14 +166,9 @@ hlToggle.addEventListener('click', () => {
 
 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
-const urlToken = new URLSearchParams(location.search).get('token');
-if (urlToken) {
-  sessionStorage.setItem('hermytt-token', urlToken);
-  const clean = new URL(location);
-  clean.searchParams.delete('token');
-  history.replaceState(null, '', clean);
-}
+// Auth: redirect to login if no token.
 const TOKEN = sessionStorage.getItem('hermytt-token') || '';
+if (!TOKEN) { location.href = '/login?next=' + encodeURIComponent(location.pathname); }
 
 const sessions = new Map();
 let activeId = null;
