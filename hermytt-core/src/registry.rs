@@ -6,6 +6,21 @@ use tokio::sync::RwLock;
 
 const EXPIRE_AFTER: Duration = Duration::from_secs(30);
 
+fn deserialize_role_case_insensitive<'de, D>(deserializer: D) -> std::result::Result<ServiceRole, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    match s.to_lowercase().as_str() {
+        "shell" => Ok(ServiceRole::Shell),
+        "renderer" => Ok(ServiceRole::Renderer),
+        "highlighter" => Ok(ServiceRole::Highlighter),
+        "sandbox" => Ok(ServiceRole::Sandbox),
+        "bot" => Ok(ServiceRole::Bot),
+        _ => Ok(ServiceRole::Unknown),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ServiceRole {
@@ -14,6 +29,7 @@ pub enum ServiceRole {
     Highlighter,
     Sandbox,
     Bot,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -26,6 +42,7 @@ pub enum ServiceStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceInfo {
     pub name: String,
+    #[serde(deserialize_with = "deserialize_role_case_insensitive")]
     pub role: ServiceRole,
     pub endpoint: String,
     pub status: ServiceStatus,
