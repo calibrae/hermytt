@@ -299,6 +299,11 @@ async fn save_config(
         return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "no config file"}))));
     };
 
+    // Reject changes to auth section (prevent token lockout).
+    if body.get("auth").is_some() {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "cannot modify [auth] via API"}))));
+    }
+
     // Validate required fields per transport.
     if let Some(transport) = body.get("transport") {
         if let Some(mqtt) = transport.get("mqtt") {
@@ -1009,6 +1014,14 @@ token = "$HERMYTT_KEY"
 [shell]
 default = "${{SHELL:-/bin/bash}}"
 CONF
+sudo chmod 600 "$INSTALL_DIR/shytti.toml"
+
+# Write env file for systemd (avoids token in unit file / /proc/*/environ)
+sudo tee "$INSTALL_DIR/env" > /dev/null << ENV
+HERMYTT_URL=$HERMYTT_URL
+HERMYTT_KEY=$HERMYTT_KEY
+ENV
+sudo chmod 600 "$INSTALL_DIR/env"
 
 # Install systemd service
 if command -v systemctl &> /dev/null; then
@@ -1024,8 +1037,7 @@ User=$(whoami)
 ExecStart=$INSTALL_DIR/shytti daemon -c $INSTALL_DIR/shytti.toml
 Restart=always
 RestartSec=2
-Environment=HERMYTT_URL=$HERMYTT_URL
-Environment=HERMYTT_KEY=$HERMYTT_KEY
+EnvironmentFile=$INSTALL_DIR/env
 
 [Install]
 WantedBy=multi-user.target

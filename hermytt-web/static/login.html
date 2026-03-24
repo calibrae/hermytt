@@ -83,7 +83,8 @@ body {
 <script>
 // If already authed, redirect.
 if (sessionStorage.getItem('hermytt-token')) {
-  location.href = new URLSearchParams(location.search).get('next') || '/';
+  const next = new URLSearchParams(location.search).get('next') || '/';
+  location.href = (next.startsWith('/') && !next.startsWith('//') && !next.startsWith('/\\') && !next.toLowerCase().startsWith('javascript:')) ? next : '/';
 }
 
 document.getElementById('form').addEventListener('submit', async (e) => {
@@ -96,7 +97,8 @@ document.getElementById('form').addEventListener('submit', async (e) => {
     const res = await fetch('/info', { headers: { 'X-Hermytt-Key': token } });
     if (res.ok) {
       sessionStorage.setItem('hermytt-token', token);
-      location.href = new URLSearchParams(location.search).get('next') || '/';
+      const next = new URLSearchParams(location.search).get('next') || '/';
+  location.href = (next.startsWith('/') && !next.startsWith('//') && !next.startsWith('/\\') && !next.toLowerCase().startsWith('javascript:')) ? next : '/';
     } else {
       document.getElementById('err').style.display = 'block';
     }

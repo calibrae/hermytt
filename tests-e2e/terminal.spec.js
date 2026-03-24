@@ -1,7 +1,14 @@
 const { test, expect } = require('@playwright/test');
 
 const TOKEN = 'hermytt-test-token';
-const URL = `/?token=${TOKEN}`;
+
+// Login helper: set token in sessionStorage before navigating.
+async function login(page) {
+  await page.goto('/login');
+  await page.evaluate((token) => {
+    sessionStorage.setItem('hermytt-token', token);
+  }, TOKEN);
+}
 
 test.describe('Terminal', () => {
 
@@ -10,7 +17,7 @@ test.describe('Terminal', () => {
     page.on('console', msg => logs.push(msg.text()));
     page.on('pageerror', err => logs.push('ERROR: ' + err.message));
 
-    await page.goto(URL);
+    await login(page); await page.goto("/");
     await page.waitForTimeout(2000);
 
     console.log('Browser logs:', logs);
@@ -22,7 +29,7 @@ test.describe('Terminal', () => {
     const logs = [];
     page.on('console', msg => logs.push(msg.text()));
 
-    await page.goto(URL);
+    await login(page); await page.goto("/");
     await page.waitForTimeout(3000);
 
     console.log('Browser logs:', logs);
@@ -31,7 +38,7 @@ test.describe('Terminal', () => {
   });
 
   test('canvas exists and has dimensions', async ({ page }) => {
-    await page.goto(URL);
+    await login(page); await page.goto("/");
     await page.waitForTimeout(2000);
 
     const canvas = await page.$('canvas');
@@ -51,7 +58,7 @@ test.describe('Terminal', () => {
     const logs = [];
     page.on('console', msg => logs.push(msg.text()));
 
-    await page.goto(URL);
+    await login(page); await page.goto("/");
     await page.waitForTimeout(3000);
 
     // Check if write() was called by looking at logs
@@ -79,7 +86,7 @@ test.describe('Terminal', () => {
     page.on('console', msg => logs.push(`[${msg.type()}] ${msg.text()}`));
     page.on('pageerror', err => errors.push(err.message));
 
-    await page.goto(URL);
+    await login(page); await page.goto("/");
     await page.waitForTimeout(4000);
 
     // Dump everything
@@ -132,7 +139,7 @@ test.describe('Session lifecycle', () => {
     const logs = [];
     page.on('console', msg => logs.push(msg.text()));
 
-    await page.goto(URL);
+    await login(page); await page.goto("/");
     await page.waitForTimeout(3000);
 
     // Verify connected

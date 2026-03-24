@@ -341,6 +341,11 @@ impl SessionManager {
             shell: String::new(),
         });
 
+        anyhow::ensure!(
+            !sessions.contains_key(&session_id),
+            "session ID '{}' already exists",
+            session_id
+        );
         sessions.insert(session_id.clone(), session);
         info!(session = %session_id, "managed session registered");
         Ok(handle)
