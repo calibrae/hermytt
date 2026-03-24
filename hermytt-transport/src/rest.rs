@@ -1504,8 +1504,8 @@ async fn run_outbound_control(
             msg = ws_rx.next() => {
                 match msg {
                     Some(Ok(TsMessage::Text(text))) => {
-                        if let Ok(shytti_msg) = serde_json::from_str::<ShyttiMessage>(&text) {
-                            match shytti_msg {
+                        match serde_json::from_str::<ShyttiMessage>(&text) {
+                            Ok(shytti_msg) => { match shytti_msg {
                                 ShyttiMessage::Heartbeat { meta } => {
                                     control_hub.heartbeat(&name, meta.clone()).await;
                                     let svc = hermytt_core::registry::ServiceInfo {
@@ -1562,6 +1562,9 @@ async fn run_outbound_control(
                                         }
                                     }
                                 }
+                            } }
+                            Err(e) => {
+                                warn!(name = %name, error = %e, "outbound: unrecognized message");
                             }
                         }
                     }
