@@ -992,12 +992,12 @@ esac
 echo "platform: $OS/$ARCH"
 
 # Download shytti binary
-DOWNLOAD_URL="https://github.com/calibrae/shytti/releases/latest/download/shytti-$OS-$ARCH"
+DOWNLOAD_URL="https://github.com/yttfam/shytti/releases/latest/download/shytti-$OS-$ARCH"
 echo "downloading shytti from $DOWNLOAD_URL..."
 sudo mkdir -p "$INSTALL_DIR"
 sudo curl -fSL "$DOWNLOAD_URL" -o "$INSTALL_DIR/shytti" || {{
     echo "download failed — you may need to build shytti manually"
-    echo "  git clone https://github.com/calibrae/shytti"
+    echo "  git clone https://github.com/yttfam/shytti"
     echo "  cd shytti && cargo build --release"
     echo "  sudo cp target/release/shytti $INSTALL_DIR/"
     exit 1

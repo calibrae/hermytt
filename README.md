@@ -13,10 +13,10 @@ The hermit lives alone. But he talks to everyone.
 
 ## Install
 
-Download a binary from [releases](https://github.com/calibrae/hermytt/releases):
+Download a binary from [releases](https://github.com/yttfam/hermytt/releases):
 
 ```bash
-curl -fSL https://github.com/calibrae/hermytt/releases/latest/download/hermytt-server-linux-x86_64 -o hermytt-server
+curl -fSL https://github.com/yttfam/hermytt/releases/latest/download/hermytt-server-linux-x86_64 -o hermytt-server
 chmod +x hermytt-server
 ```
 
@@ -112,7 +112,7 @@ nc host 7779
 
 ## Web UI (optional, embedded)
 
-Hermytt ships with an optional web interface powered by [crytter](https://github.com/calibrae/crytter) (86KB WASM terminal) and [prytty](https://github.com/calibrae/prytty) (75KB WASM syntax highlighter). The web UI is decoupled from the core — hermytt works headless.
+Hermytt ships with an optional web interface powered by [crytter](https://github.com/yttfam/crytter) (86KB WASM terminal) and [prytty](https://github.com/yttfam/prytty) (75KB WASM syntax highlighter). The web UI is decoupled from the core — hermytt works headless.
 
 - `/` — tabbed terminal with keyboard shortcuts
 - `/admin` — command center: family services, sessions, transports, exec, config
@@ -124,12 +124,12 @@ Hermytt is the patriarch of an ecosystem of composable tools:
 | Project | Role |
 |---------|------|
 | **hermytt** | Transport multiplexer — routes bytes, auth, sessions |
-| [shytti](https://github.com/calibrae/shytti) | Shell orchestrator — spawns and manages shells |
-| [crytter](https://github.com/calibrae/crytter) | WASM terminal emulator (86KB) |
-| [prytty](https://github.com/calibrae/prytty) | WASM syntax highlighter (75KB) |
-| [fytti](https://github.com/calibrae/fytti) | GPU-accelerated WASM app runtime |
-| [wytti](https://github.com/calibrae/wytti) | WASI sandbox runtime |
-| [hermytt-bots](https://github.com/calibrae/hermytt-bots) | Chat bot bridges (Telegram, Signal, Discord) |
+| [shytti](https://github.com/yttfam/shytti) | Shell orchestrator — spawns and manages shells |
+| [crytter](https://github.com/yttfam/crytter) | WASM terminal emulator (86KB) |
+| [prytty](https://github.com/yttfam/prytty) | WASM syntax highlighter (75KB) |
+| [fytti](https://github.com/yttfam/fytti) | GPU-accelerated WASM app runtime |
+| [wytti](https://github.com/yttfam/wytti) | WASI sandbox runtime |
+| [hermytt-bots](https://github.com/yttfam/hermytt-bots) | Chat bot bridges (Telegram, Signal, Discord) |
 
 ### Service registry
 
