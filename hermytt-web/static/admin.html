@@ -62,6 +62,17 @@ tr:hover td { background: rgba(74,138,244,0.03); }
 .role-highlighter { background: rgba(160,112,240,0.1); color: var(--purple); border: 1px solid rgba(160,112,240,0.2); }
 .role-sandbox { background: rgba(48,208,208,0.1); color: var(--cyan); border: 1px solid rgba(48,208,208,0.2); }
 .role-bot { background: rgba(232,176,48,0.1); color: var(--yellow); border: 1px solid rgba(232,176,48,0.2); }
+.role-parser { background: rgba(240,150,60,0.1); color: #f0963c; border: 1px solid rgba(240,150,60,0.2); }
+
+/* Clickable service rows */
+tr.svc-configurable { cursor: pointer; }
+tr.svc-configurable:hover td { background: rgba(74,138,244,0.06); }
+
+/* Service panel */
+.svc-status { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 3px; font-size: 11px; }
+.svc-status.idle { color: var(--green); }
+.svc-status.thinking { color: var(--yellow); }
+.svc-status.tool_use { color: var(--cyan); }
 
 /* Buttons */
 .btn { background: var(--bg-header); border: 1px solid var(--border); color: var(--text-dim); padding: 4px 10px; font-family: var(--font); font-size: 10px; border-radius: 3px; cursor: pointer; transition: all 0.1s; letter-spacing: 0.3px; }
@@ -227,12 +238,14 @@ async function refreshFamily() {
     tbody.innerHTML = services.map(s => {
       const on = s.status === 'connected';
       const dotCls = on ? 'dot-on' : 'dot-off';
-      const roleMap = { Shell:'shell', Renderer:'renderer', Highlighter:'highlighter', Sandbox:'sandbox', Bot:'bot' };
+      const roleMap = { Shell:'shell', Renderer:'renderer', Highlighter:'highlighter', Sandbox:'sandbox', Bot:'bot', Parser:'parser' };
       const role = roleMap[s.role] || 'shell';
-      const metaStr = s.meta ? Object.entries(s.meta).map(([k,v]) => `<span class="meta-tag">${esc(k)}=${esc(String(v))}</span>`).join('') : '';
-      return `<tr>
+      const configurable = on && s.endpoint.startsWith('http');
+      const rowCls = configurable ? 'svc-configurable' : '';
+      const click = configurable ? `onclick="openServicePanel('${esc(s.name)}')"` : '';
+      return `<tr class="${rowCls}" ${click}>
         <td><span class="dot ${dotCls}"></span></td>
-        <td>${esc(s.name)}</td>
+        <td>${esc(s.name)}${configurable?' \u2699':''}</td>
         <td><span class="role role-${role}">${esc(role)}</span></td>
         <td style="color:var(--text-dim)">${esc(s.meta?.host || s.name)}</td>
         <td><span class="meta-tag">${esc(s.endpoint === 'control-ws' ? 'mode 1' : s.endpoint === 'paired' ? 'mode 2' : s.endpoint || '-')}</span></td>
@@ -492,6 +505,150 @@ document.getElementById('btn-restart').addEventListener('click', async () => {
 });
 
 window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+// --- Service config panel ---
+const SERVICE_PANEL_DEFS = {
+  parser: {
+    label: 'PTY Parser',
+    fields: [
+      { key: 'session_id', label: 'Session', type: 'session-picker' },
+      { key: 'debounce_ms', label: 'Debounce (ms)', type: 'range', min: 50, max: 2000, step: 50 },
+    ],
+    readOnly: [
+      { key: 'telegram_connected', label: 'Telegram', type: 'bool' },
+      { key: 'mqtt_host', label: 'MQTT Host' },
+    ],
+    statusFields: [
+      { key: 'claude_state', label: 'Claude', type: 'state-indicator' },
+      { key: 'messages_processed', label: 'Messages' },
+      { key: 'uptime', label: 'Uptime' },
+    ],
+    actions: [
+      { key: 'send', label: 'Send to stdin', endpoint: '/session/send', bodyKey: 'text', type: 'text-action' },
+    ],
+  },
+};
+
+async function openServicePanel(name) {
+  // Find service info from last registry fetch
+  const regRes = await fetch('/registry', { headers: authHeaders() });
+  const regData = await regRes.json();
+  const svc = (regData.services || []).find(s => s.name === name);
+  if (!svc) return banner('service not found', 'err');
+
+  const roleMap = { Shell:'shell', Renderer:'renderer', Highlighter:'highlighter', Sandbox:'sandbox', Bot:'bot', Parser:'parser' };
+  const role = roleMap[svc.role] || 'unknown';
+  const def = SERVICE_PANEL_DEFS[role];
+
+  // Fetch status, config, and sessions in parallel via proxy
+  const proxy = `/registry/${encodeURIComponent(name)}/proxy`;
+  const [statusRes, configRes, sessionsRes] = await Promise.all([
+    fetch(`${proxy}/status`, { headers: authHeaders() }).catch(() => null),
+    fetch(`${proxy}/config`, { headers: authHeaders() }).catch(() => null),
+    fetch('/sessions', { headers: authHeaders() }),
+  ]);
+
+  const status = statusRes?.ok ? await statusRes.json() : {};
+  const svcConfig = configRes?.ok ? await configRes.json() : {};
+  const sessions = (await sessionsRes.json()).sessions || [];
+
+  document.getElementById('modal-title').textContent = def ? def.label + ' — ' + name : name;
+  const fields = document.getElementById('modal-fields');
+
+  if (!def) {
+    // Generic: show raw JSON
+    fields.innerHTML = `<div class="field"><label>Status</label><pre style="font-size:11px;color:var(--text-dim);white-space:pre-wrap">${esc(JSON.stringify(status, null, 2))}</pre></div>
+      <div class="field"><label>Config</label><pre style="font-size:11px;color:var(--text-dim);white-space:pre-wrap">${esc(JSON.stringify(svcConfig, null, 2))}</pre></div>`;
+    document.getElementById('modal-bg').classList.add('active');
+    document.getElementById('modal-save').style.display = 'none';
+    return;
+  }
+
+  let html = '';
+
+  // Status fields
+  if (def.statusFields) {
+    html += '<div style="display:flex;gap:16px;margin-bottom:14px;flex-wrap:wrap">';
+    for (const f of def.statusFields) {
+      const v = status[f.key] ?? svcConfig[f.key] ?? '-';
+      if (f.type === 'state-indicator') {
+        const cls = String(v).toLowerCase().replace(/[^a-z_]/g,'');
+        html += `<div><label style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px">${esc(f.label)}</label><div class="svc-status ${cls}">\u25cf ${esc(String(v))}</div></div>`;
+      } else {
+        html += `<div><label style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px">${esc(f.label)}</label><div style="font-size:13px">${esc(String(v))}</div></div>`;
+      }
+    }
+    html += '</div>';
+  }
+
+  // Editable fields
+  for (const f of def.fields) {
+    const v = svcConfig[f.key] ?? '';
+    if (f.type === 'session-picker') {
+      html += `<div class="field"><label>${esc(f.label)}</label><select data-key="${esc(f.key)}">`;
+      html += `<option value="">— select —</option>`;
+      for (const s of sessions) {
+        const sel = s.id === v ? 'selected' : '';
+        html += `<option value="${esc(s.id)}" ${sel}>${esc(s.id)}${s.host ? ' ('+esc(s.host)+')' : ''}</option>`;
+      }
+      html += `</select></div>`;
+    } else if (f.type === 'range') {
+      html += `<div class="field"><label>${esc(f.label)}: <span id="rv-${f.key}">${v}</span></label><input type="range" data-key="${esc(f.key)}" min="${f.min}" max="${f.max}" step="${f.step}" value="${v}" oninput="document.getElementById('rv-${f.key}').textContent=this.value"></div>`;
+    } else {
+      html += `<div class="field"><label>${esc(f.label)}</label><input type="text" data-key="${esc(f.key)}" value="${esc(String(v))}"></div>`;
+    }
+  }
+
+  // Read-only fields
+  if (def.readOnly) {
+    for (const f of def.readOnly) {
+      const v = svcConfig[f.key] ?? status[f.key] ?? '-';
+      if (f.type === 'bool') {
+        html += `<div class="field"><label>${esc(f.label)}</label><div><span class="dot ${v ? 'dot-on' : 'dot-off'}"></span> ${v ? 'connected' : 'disconnected'}</div></div>`;
+      } else {
+        html += `<div class="field"><label>${esc(f.label)}</label><div style="color:var(--text-dim);font-size:13px">${esc(String(v))}</div></div>`;
+      }
+    }
+  }
+
+  // Actions
+  if (def.actions) {
+    for (const a of def.actions) {
+      if (a.type === 'text-action') {
+        html += `<div class="field" style="display:flex;gap:8px;align-items:end"><div style="flex:1"><label>${esc(a.label)}</label><input type="text" id="svc-action-${a.key}" placeholder="type and press send"></div><button class="btn" onclick="svcAction('${esc(name)}','${esc(a.endpoint)}','${esc(a.bodyKey)}','svc-action-${a.key}')">send</button></div>`;
+      }
+    }
+  }
+
+  fields.innerHTML = html;
+  document.getElementById('modal-bg').classList.add('active');
+  document.getElementById('modal-save').style.display = '';
+
+  document.getElementById('modal-save').onclick = async () => {
+    const update = {};
+    fields.querySelectorAll('[data-key]').forEach(el => {
+      const k = el.dataset.key;
+      const fd = def.fields.find(f => f.key === k);
+      if (!fd) return;
+      let v = el.value;
+      if (fd.type === 'range') v = parseInt(v);
+      if (v !== '' && v !== null) update[k] = v;
+    });
+    const res = await fetch(`${proxy}/config`, { method: 'PUT', headers: authHeaders(), body: JSON.stringify(update) });
+    if (res.ok) { closeModal(); banner('config updated', 'ok'); setTimeout(() => document.getElementById('banner-area').className = 'banner', 3000); }
+    else { const d = await res.json().catch(() => ({})); banner(d.error || 'update failed', 'err'); }
+  };
+}
+
+async function svcAction(name, endpoint, bodyKey, inputId) {
+  const input = document.getElementById(inputId);
+  const text = input.value.trim();
+  if (!text) return;
+  const proxy = `/registry/${encodeURIComponent(name)}/proxy`;
+  const res = await fetch(`${proxy}${endpoint}`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ [bodyKey]: text }) });
+  if (res.ok) { input.value = ''; banner('sent', 'ok'); setTimeout(() => document.getElementById('banner-area').className = 'banner', 2000); }
+  else { banner('send failed', 'err'); }
+}
 
 // --- Boot ---
 function refreshAll() { refreshInfo(); refreshSessions(); refreshFamily(); }

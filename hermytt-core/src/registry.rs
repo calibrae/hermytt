@@ -17,6 +17,7 @@ where
         "highlighter" => Ok(ServiceRole::Highlighter),
         "sandbox" => Ok(ServiceRole::Sandbox),
         "bot" => Ok(ServiceRole::Bot),
+        "parser" => Ok(ServiceRole::Parser),
         _ => Ok(ServiceRole::Unknown),
     }
 }
@@ -29,6 +30,7 @@ pub enum ServiceRole {
     Highlighter,
     Sandbox,
     Bot,
+    Parser,
     Unknown,
 }
 
