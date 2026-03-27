@@ -337,7 +337,7 @@ document.getElementById('btn-new-session').addEventListener('click', async () =>
     } else {
       const url = '/hosts/' + encodeURIComponent(host) + '/spawn';
       console.log('[hermytt] spawn url:', url);
-      const res = await fetch(url, { method: 'POST', headers: authHeaders(), body: JSON.stringify({shell: '/bin/bash'}) });
+      const res = await fetch(url, { method: 'POST', headers: authHeaders(), body: JSON.stringify({}) });
       const data = await res.json();
       console.log('[hermytt] spawn response:', JSON.stringify(data));
       if (!res.ok) { banner(data.error || 'spawn failed', 'err'); }
