@@ -443,7 +443,18 @@ async fn run_outbound_control(
                             }
                         }
                     }
-                    Some(Ok(TsMessage::Close(_))) | None => break,
+                    Some(Ok(TsMessage::Close(f))) => {
+                        warn!(name = %name, frame = ?f, "outbound: received Close frame");
+                        break;
+                    }
+                    None => {
+                        warn!(name = %name, "outbound: ws stream ended (None)");
+                        break;
+                    }
+                    Some(Err(e)) => {
+                        warn!(name = %name, error = %e, "outbound: ws error");
+                        break;
+                    }
                     _ => {}
                 }
             }
@@ -453,7 +464,10 @@ async fn run_outbound_control(
                         let json = serde_json::to_string(&msg).unwrap_or_default();
                         if ws_tx.send(TsMessage::Text(json.into())).await.is_err() { break; }
                     }
-                    None => break,
+                    None => {
+                        warn!(name = %name, "outbound: control channel dropped (hub replaced?)");
+                        break;
+                    }
                 }
             }
         }
@@ -528,11 +542,16 @@ pub async fn connect_paired_host(
         let ws = ws_rx.reunite(ws_tx).unwrap();
 
         info!(name = %host.name, "paired host connected");
-        backoff = 1; // reset on success
 
+        let start = std::time::Instant::now();
         run_outbound_control(ws, host.name.clone(), control_hub.clone(), registry.clone(), sessions.clone()).await;
 
-        warn!(name = %host.name, "paired host disconnected, reconnecting in {}s", backoff);
+        // Only reset backoff if we were connected for more than 30s (got at least a heartbeat).
+        if start.elapsed() > std::time::Duration::from_secs(30) {
+            backoff = 1;
+        }
+
+        warn!(name = %host.name, backoff = backoff, "paired host disconnected, reconnecting");
         tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
         backoff = (backoff * 2).min(max_backoff);
     }
