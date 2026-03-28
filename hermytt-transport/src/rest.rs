@@ -1380,9 +1380,7 @@ async fn handle_control_ws(mut socket: WebSocket, state: AppState) {
 
     info!(name = %name, "control WS established");
 
-    // Ask shytti to re-announce active shells (session recovery after restart).
-    let list_msg = serde_json::to_string(&ControlMessage::ListShells {}).unwrap_or_default();
-    let _ = socket.send(Message::text(list_msg)).await;
+    let mut shells_requested = false;
 
     loop {
         tokio::select! {
@@ -1405,6 +1403,12 @@ async fn handle_control_ws(mut socket: WebSocket, state: AppState) {
                                         meta,
                                     };
                                     state.registry.register(svc).await;
+                                    // Request shell list after first heartbeat (session recovery).
+                                    if !shells_requested {
+                                        shells_requested = true;
+                                        let msg = serde_json::to_string(&ControlMessage::ListShells {}).unwrap_or_default();
+                                        let _ = socket.send(Message::text(msg)).await;
+                                    }
                                 }
                                 ShyttiMessage::SpawnOk { req_id, shell_id, session_id } => {
                                     // Register the managed session so it appears in /sessions.
@@ -1656,9 +1660,7 @@ async fn run_outbound_control(
 
     info!(name = %name, "outbound control channel active");
 
-    // Ask shytti to re-announce active shells (session recovery after restart).
-    let list_msg = serde_json::to_string(&ControlMessage::ListShells {}).unwrap_or_default();
-    let _ = ws_tx.send(TsMessage::text(list_msg)).await;
+    let mut shells_requested = false;
 
     loop {
         tokio::select! {
@@ -1679,6 +1681,12 @@ async fn run_outbound_control(
                                         meta,
                                     };
                                     registry.register(svc).await;
+                                    // Request shell list after first heartbeat (session recovery).
+                                    if !shells_requested {
+                                        shells_requested = true;
+                                        let msg = serde_json::to_string(&ControlMessage::ListShells {}).unwrap_or_default();
+                                        let _ = ws_tx.send(TsMessage::text(msg)).await;
+                                    }
                                 }
                                 ShyttiMessage::SpawnOk { req_id, shell_id, session_id } => {
                                     let _ = sessions.register_session(Some(session_id.clone()), Some(name.clone())).await;
