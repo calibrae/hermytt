@@ -167,6 +167,20 @@ async fn handle_control_ws(mut socket: WebSocket, state: AppState) {
                                     for shell in shells {
                                         if state.sessions.get_session(&shell.session_id).await.is_none() {
                                             let _ = state.sessions.register_session(Some(shell.session_id.clone()), Some(name.clone())).await;
+                                            // Spawn stdin forwarder for recovered session.
+                                            if let Some(mut stdin_rx) = state.sessions.take_stdin_rx(&shell.session_id).await {
+                                                let hub = state.control_hub.clone();
+                                                let host_name = name.clone();
+                                                let sid = shell.session_id.clone();
+                                                tokio::spawn(async move {
+                                                    use base64::Engine;
+                                                    while let Some(data) = stdin_rx.recv().await {
+                                                        let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+                                                        let msg = ControlMessage::Input { session_id: sid.clone(), data: b64 };
+                                                        if hub.send_to(&host_name, msg).await.is_err() { break; }
+                                                    }
+                                                });
+                                            }
                                             info!(name = %name, session = %shell.session_id, "session recovered");
                                         }
                                     }
@@ -433,6 +447,20 @@ async fn run_outbound_control(
                                     for shell in shells {
                                         if sessions.get_session(&shell.session_id).await.is_none() {
                                             let _ = sessions.register_session(Some(shell.session_id.clone()), Some(name.clone())).await;
+                                            // Spawn stdin forwarder for recovered session.
+                                            if let Some(mut stdin_rx) = sessions.take_stdin_rx(&shell.session_id).await {
+                                                let hub = control_hub.clone();
+                                                let host_name = name.clone();
+                                                let sid = shell.session_id.clone();
+                                                tokio::spawn(async move {
+                                                    use base64::Engine;
+                                                    while let Some(data) = stdin_rx.recv().await {
+                                                        let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+                                                        let msg = ControlMessage::Input { session_id: sid.clone(), data: b64 };
+                                                        if hub.send_to(&host_name, msg).await.is_err() { break; }
+                                                    }
+                                                });
+                                            }
                                             info!(name = %name, session = %shell.session_id, "session recovered");
                                         }
                                     }
