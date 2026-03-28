@@ -1,5 +1,8 @@
+pub mod bootstrap;
+pub mod control_ws;
 pub mod mqtt;
 pub mod mqtt_pty;
+pub mod proxy;
 pub mod rest;
 pub mod tcp;
 pub mod tls;

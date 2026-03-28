@@ -1060,6 +1060,7 @@ dependencies = [
  "bytes",
  "futures-util",
  "hermytt-core",
+ "reqwest",
  "rumqttc",
  "rustls-pemfile",
  "serde",

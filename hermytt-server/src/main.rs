@@ -292,7 +292,7 @@ async fn start_server(
 
     // Reconnect to all Mode 2 paired hosts from stored keys.
     let keys_path = hermytt_core::pairing::keys_path(config_path);
-    hermytt_transport::rest::spawn_paired_host_connections(
+    hermytt_transport::control_ws::spawn_paired_host_connections(
         &keys_path,
         auth_token.clone(),
         control_hub,
