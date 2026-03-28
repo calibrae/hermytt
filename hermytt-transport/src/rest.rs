@@ -1380,6 +1380,10 @@ async fn handle_control_ws(mut socket: WebSocket, state: AppState) {
 
     info!(name = %name, "control WS established");
 
+    // Ask shytti to re-announce active shells (session recovery after restart).
+    let list_msg = serde_json::to_string(&ControlMessage::ListShells {}).unwrap_or_default();
+    let _ = socket.send(Message::text(list_msg)).await;
+
     loop {
         tokio::select! {
             // Messages from shytti.
@@ -1454,6 +1458,15 @@ async fn handle_control_ws(mut socket: WebSocket, state: AppState) {
                                     if let Ok(bytes) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &data) {
                                         if let Some(handle) = state.sessions.get_session(&session_id).await {
                                             let _ = handle.output_tx.send(bytes);
+                                        }
+                                    }
+                                }
+                                ShyttiMessage::ShellsList { shells } => {
+                                    info!(name = %name, count = shells.len(), "recovering shells");
+                                    for shell in shells {
+                                        if state.sessions.get_session(&shell.session_id).await.is_none() {
+                                            let _ = state.sessions.register_session(Some(shell.session_id.clone()), Some(name.clone())).await;
+                                            info!(name = %name, session = %shell.session_id, "session recovered");
                                         }
                                     }
                                 }
@@ -1643,6 +1656,10 @@ async fn run_outbound_control(
 
     info!(name = %name, "outbound control channel active");
 
+    // Ask shytti to re-announce active shells (session recovery after restart).
+    let list_msg = serde_json::to_string(&ControlMessage::ListShells {}).unwrap_or_default();
+    let _ = ws_tx.send(TsMessage::text(list_msg)).await;
+
     loop {
         tokio::select! {
             msg = ws_rx.next() => {
@@ -1703,6 +1720,15 @@ async fn run_outbound_control(
                                     if let Ok(bytes) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &data) {
                                         if let Some(handle) = sessions.get_session(&session_id).await {
                                             let _ = handle.output_tx.send(bytes);
+                                        }
+                                    }
+                                }
+                                ShyttiMessage::ShellsList { shells } => {
+                                    info!(name = %name, count = shells.len(), "recovering shells");
+                                    for shell in shells {
+                                        if sessions.get_session(&shell.session_id).await.is_none() {
+                                            let _ = sessions.register_session(Some(shell.session_id.clone()), Some(name.clone())).await;
+                                            info!(name = %name, session = %shell.session_id, "session recovered");
                                         }
                                     }
                                 }

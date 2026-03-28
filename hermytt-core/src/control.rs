@@ -40,6 +40,8 @@ pub enum ControlMessage {
         session_id: String,
         data: String, // base64
     },
+    /// Ask shytti to list all active shells.
+    ListShells {},
 }
 
 /// Messages shytti sends to hermytt.
@@ -72,6 +74,16 @@ pub enum ShyttiMessage {
         session_id: String,
         data: String, // base64
     },
+    /// Response to ListShells — all active shells on this shytti.
+    ShellsList {
+        shells: Vec<ShellInfo>,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ShellInfo {
+    pub shell_id: String,
+    pub session_id: String,
 }
 
 /// Pending spawn request waiting for a response.
