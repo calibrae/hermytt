@@ -105,6 +105,7 @@ tr.svc-configurable:hover td { background: rgba(74,138,244,0.06); }
 .modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.8); z-index: 100; justify-content: center; align-items: center; }
 .modal-bg.active { display: flex; }
 .modal { background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 20px; width: 400px; max-width: 90vw; }
+.modal.wide { width: 640px; }
 .modal h3 { font-size: 13px; color: var(--text); margin-bottom: 14px; font-weight: 500; }
 .field { margin-bottom: 10px; }
 .field label { display: block; font-size: 10px; color: var(--text-dim); margin-bottom: 3px; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -190,7 +191,7 @@ tr.svc-configurable:hover td { background: rgba(74,138,244,0.06); }
 
 <!-- Edit modal -->
 <div class="modal-bg" id="modal-bg">
-  <div class="modal">
+  <div class="modal" id="modal-box">
     <h3 id="modal-title">Edit</h3>
     <div id="modal-fields"></div>
     <div class="modal-actions">
@@ -474,7 +475,7 @@ function openEditModal(name) {
     config.transport[name] = u; dirty = true; closeModal(); renderTransports(); saveConfig();
   };
 }
-function closeModal() { document.getElementById('modal-bg').classList.remove('active'); }
+function closeModal() { document.getElementById('modal-bg').classList.remove('active'); document.getElementById('modal-box').classList.remove('wide'); }
 document.getElementById('modal-cancel').addEventListener('click', closeModal);
 document.getElementById('modal-bg').addEventListener('click', (e) => { if (e.target.id==='modal-bg') closeModal(); });
 
@@ -568,6 +569,7 @@ async function openParserPanel(name) {
   }
 
   document.getElementById('modal-title').textContent = 'grytti — PTY Parser';
+  document.getElementById('modal-box').classList.add('wide');
   const fields = document.getElementById('modal-fields');
 
   let html = '';
@@ -701,7 +703,8 @@ async function deleteParserSession(name, sessionId) {
   const proxy = `/registry/${encodeURIComponent(name)}/proxy`;
   const res = await fetch(`${proxy}/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE', headers: authHeaders() });
   if (res.ok) { banner('removed', 'ok'); setTimeout(() => document.getElementById('banner-area').className = 'banner', 3000); openParserPanel(name); }
-  else { banner('failed', 'err'); }
+  else if (res.status === 404) { banner('delete not supported yet — grytti needs to ship DELETE /sessions/{id}', 'err'); }
+  else { const d = await res.json().catch(() => ({})); banner(d.error || 'delete failed', 'err'); }
 }
 
 async function parserSendStdin(name) {
