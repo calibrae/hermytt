@@ -694,7 +694,8 @@ async function editParserSession(name, sessionId) {
       method: 'PUT', headers: authHeaders(), body: JSON.stringify(update)
     });
     if (r.ok) { closeModal(); banner('updated', 'ok'); setTimeout(() => document.getElementById('banner-area').className = 'banner', 3000); openParserPanel(name); }
-    else { const d = await r.json().catch(() => ({})); banner(d.error || 'failed', 'err'); }
+    else if (r.status === 404 || r.status === 405) { banner('grytti hasn\'t shipped PUT /sessions/{id} yet', 'err'); }
+    else { const d = await r.json().catch(() => ({})); banner(d.error || 'update failed', 'err'); }
   };
 }
 
