@@ -138,39 +138,6 @@ async fn start_server(
 
     let mut tasks = Vec::new();
 
-    // Wait for a shell orchestrator (Shytti) to register. If none arrives
-    // within 5 seconds, spawn a local PTY session as fallback.
-    let fallback_sessions = sessions.clone();
-    let fallback_recording_dir = recording_dir.clone();
-    let auto_record = config.server.auto_record;
-    tasks.push(tokio::spawn(async move {
-        info!("waiting 5s for shell orchestrator...");
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-
-        // Check if any sessions exist (Shytti would have registered some).
-        let existing = fallback_sessions.list_sessions().await;
-        if !existing.is_empty() {
-            info!(count = existing.len(), "shell orchestrator active — skipping local PTY");
-            return;
-        }
-
-        info!("no shell orchestrator found — spawning local PTY");
-        match fallback_sessions.create_session().await {
-            Ok(handle) => {
-                info!(session = %handle.id, "fallback session ready");
-                if auto_record {
-                    if let Some(ref dir) = fallback_recording_dir {
-                        let recordings = std::sync::Arc::new(tokio::sync::Mutex::new(
-                            std::collections::HashMap::new(),
-                        ));
-                        hermytt_transport::rest::auto_record_session(&handle, dir, &recordings).await;
-                    }
-                }
-            }
-            Err(e) => error!(error = %e, "failed to create fallback session"),
-        }
-    }));
-
     // Periodic dead session cleanup.
     let cleanup_sessions = sessions.clone();
     tasks.push(tokio::spawn(async move {
