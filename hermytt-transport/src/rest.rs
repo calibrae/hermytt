@@ -113,7 +113,7 @@ impl Transport for RestTransport {
         // API routes behind auth.
         let api = Router::new()
             .route("/info", get(server_info))
-            .route("/session", post(create_session))
+            // Local session creation removed — shytti owns all spawning.
             .route("/sessions", get(list_sessions))
             .route("/session/{id}/stdin", post(write_stdin))
             .route("/session/{id}/stdout", get(stream_stdout))
@@ -371,17 +371,6 @@ async fn restart_server() -> StatusCode {
         std::process::exit(0);
     });
     StatusCode::OK
-}
-
-async fn create_session(
-    State(state): State<AppState>,
-) -> Result<Json<SessionInfo>, StatusCode> {
-    let handle = state
-        .sessions
-        .create_session()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(SessionInfo { id: handle.id, host: handle.host }))
 }
 
 async fn list_sessions(State(state): State<AppState>) -> Json<SessionListResponse> {

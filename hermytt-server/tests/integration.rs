@@ -123,33 +123,7 @@ async fn list_sessions_returns_default() {
     assert_eq!(sessions.len(), 1);
 }
 
-#[tokio::test]
-async fn create_session() {
-    let base = start_server().await;
-
-    // Create a new session.
-    let res: serde_json::Value = client()
-        .post(format!("{}/session?token={}", base, TOKEN))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let id = res["id"].as_str().unwrap();
-    assert_eq!(id.len(), 16);
-
-    // List should now have 2.
-    let res: serde_json::Value = client()
-        .get(format!("{}/sessions?token={}", base, TOKEN))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(res["sessions"].as_array().unwrap().len(), 2);
-}
+// create_session test removed — POST /session endpoint removed, shytti owns spawning.
 
 // --- Exec ---
 
