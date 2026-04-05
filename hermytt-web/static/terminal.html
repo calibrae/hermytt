@@ -175,6 +175,13 @@ let activeId = null;
 
 function fitAndResize(session) {
   if (!session) return;
+  // Only fit if container size actually changed (crytter's ctx.scale is cumulative).
+  const canvas = session.container.querySelector('canvas');
+  const cw = session.container.clientWidth;
+  const ch = session.container.clientHeight;
+  if (cw === session._lastW && ch === session._lastH) return;
+  session._lastW = cw;
+  session._lastH = ch;
   session.term.fit();
   if (session.ws && session.ws.readyState === WebSocket.OPEN) {
     session.ws.send(JSON.stringify({ resize: [session.term.cols, session.term.rows] }));
