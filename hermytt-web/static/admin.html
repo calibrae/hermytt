@@ -693,7 +693,7 @@ async function editParserSession(name, sessionId) {
       method: 'PUT', headers: authHeaders(), body: JSON.stringify(update)
     });
     if (r.ok) { closeModal(); banner('updated', 'ok'); setTimeout(() => document.getElementById('banner-area').className = 'banner', 3000); openParserPanel(name); }
-    else if (r.status === 404 || r.status === 405) { banner('grytti hasn\'t shipped PUT /sessions/{id} yet', 'err'); }
+    else if (r.status === 404) { banner('session not found', 'err'); }
     else { const d = await r.json().catch(() => ({})); banner(d.error || 'update failed', 'err'); }
   };
 }
@@ -703,7 +703,7 @@ async function deleteParserSession(name, sessionId) {
   const proxy = `/registry/${encodeURIComponent(name)}/proxy`;
   const res = await fetch(`${proxy}/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE', headers: authHeaders() });
   if (res.ok) { banner('removed', 'ok'); setTimeout(() => document.getElementById('banner-area').className = 'banner', 3000); openParserPanel(name); }
-  else if (res.status === 404) { banner('delete not supported yet — grytti needs to ship DELETE /sessions/{id}', 'err'); }
+  else if (res.status === 404) { banner('session not found', 'err'); }
   else { const d = await res.json().catch(() => ({})); banner(d.error || 'delete failed', 'err'); }
 }
 
