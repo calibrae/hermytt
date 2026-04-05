@@ -97,7 +97,7 @@ After=network.target
 
 [Service]
 Type=simple
-User=$(whoami)
+User=$RUN_USER
 ExecStart=$INSTALL_DIR/shytti serve -c $INSTALL_DIR/shytti.toml
 Restart=always
 RestartSec=2
@@ -152,7 +152,7 @@ elif [ "$OS" = "darwin" ]; then
         <string>$HERMYTT_KEY</string>
     </dict>
     <key>UserName</key>
-    <string>$(whoami)</string>
+    <string>$RUN_USER</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
