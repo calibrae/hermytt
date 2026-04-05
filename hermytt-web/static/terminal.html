@@ -8,9 +8,8 @@
 <title>hermytt</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
-    margin: 0;
-    padding: 0;
     background: #0a0a0a;
     font-family: monospace;
     overflow: hidden;
@@ -82,8 +81,8 @@
     flex-shrink: 0;
   }
   #new-tab:hover { color: #60a5fa; }
-  #terminals { flex: 1; position: relative; min-height: 0; overflow: hidden; }
-  .term-container { position: absolute; inset: 0; display: none; }
+  #terminals { flex: 1; position: relative; min-height: 0; overflow: hidden; display: flex; }
+  .term-container { flex: 1; overflow: hidden; cursor: text; display: none; }
   .term-container.active { display: block; }
   #mobile-input {
     display: none;
