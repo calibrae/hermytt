@@ -247,7 +247,11 @@ function addSession(id) {
   addTab(id);
   switchTo(id);          // make visible BEFORE open — canvas needs real dimensions
   term.open(container);
-  connectSession(session);
+  // Fit after open + layout settle, then connect (so first resize is correct).
+  requestAnimationFrame(() => {
+    fitAndResize(session);
+    connectSession(session);
+  });
 }
 
 function connectSession(session) {
