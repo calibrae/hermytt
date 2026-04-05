@@ -614,7 +614,7 @@ async function openParserPanel(name) {
           `<option value="${esc(s.id)}">${esc(s.id)}${s.host ? ' ('+esc(s.host)+')' : ''}</option>`
         ).join('')}
       </select></div>
-      <div style="flex:1;min-width:200px"><label style="font-size:10px;color:var(--text-dim)">Telegram bot token <span style="color:var(--text-muted)">(unique per session)</span></label><input type="text" id="grytti-add-token" placeholder="123456:ABC-DEF..."></div>
+      <div style="flex:1;min-width:200px"><label style="font-size:10px;color:var(--text-dim)">Telegram bot token <span style="color:var(--text-muted)">(optional — blank = headless)</span></label><input type="text" id="grytti-add-token" placeholder="123456:ABC-DEF..."></div>
       <button class="btn" onclick="addParserSession('${esc(name)}')">add</button>
     </div>
   </div>`;
@@ -643,11 +643,11 @@ async function addParserSession(name) {
   const sid = document.getElementById('grytti-add-session').value;
   const token = document.getElementById('grytti-add-token').value.trim();
   if (!sid) return banner('pick a session', 'err');
-  if (!token) return banner('bot token required', 'err');
+  // bot token is optional — headless mode if omitted
   const proxy = `/registry/${encodeURIComponent(name)}/proxy`;
   const res = await fetch(`${proxy}/sessions`, {
     method: 'POST', headers: authHeaders(),
-    body: JSON.stringify({ session_id: sid, bot_token: token, debounce_ms: 200 })
+    body: JSON.stringify(Object.assign({ session_id: sid, debounce_ms: 200 }, token ? { bot_token: token } : {}))
   });
   if (res.ok) { closeModal(); banner('session added', 'ok'); setTimeout(() => document.getElementById('banner-area').className = 'banner', 3000); openParserPanel(name); }
   else { const d = await res.json().catch(() => ({})); banner(d.error || 'failed', 'err'); }
