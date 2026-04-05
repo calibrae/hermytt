@@ -77,6 +77,8 @@ struct SessionInfo {
     id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -115,6 +117,7 @@ impl Transport for RestTransport {
             .route("/info", get(server_info))
             // Local session creation removed — shytti owns all spawning.
             .route("/sessions", get(list_sessions))
+            .route("/session/{id}/name", axum::routing::put(rename_session))
             .route("/session/{id}/stdin", post(write_stdin))
             .route("/session/{id}/stdout", get(stream_stdout))
             .route("/session/{id}/record", post(start_recording))
@@ -376,8 +379,25 @@ async fn restart_server() -> StatusCode {
 async fn list_sessions(State(state): State<AppState>) -> Json<SessionListResponse> {
     let sessions = state.sessions.list_sessions_with_host().await;
     Json(SessionListResponse {
-        sessions: sessions.into_iter().map(|(id, host)| SessionInfo { id, host }).collect(),
+        sessions: sessions.into_iter().map(|(id, host, name)| SessionInfo { id, host, name }).collect(),
     })
+}
+
+#[derive(Deserialize)]
+struct RenameBody {
+    name: String,
+}
+
+async fn rename_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<RenameBody>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if state.sessions.rename_session(&id, body.name.clone()).await {
+        Ok(Json(serde_json::json!({"ok": true, "name": body.name})))
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
 }
 
 async fn send_stdin(handle: &hermytt_core::SessionHandle, input: &str) -> StatusCode {

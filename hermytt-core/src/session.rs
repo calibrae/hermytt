@@ -16,6 +16,7 @@ pub const PTY_EXIT_SENTINEL: &[u8] = b"\x1b[HERMYTT_EXIT]";
 pub struct SessionHandle {
     pub id: SessionId,
     pub host: Option<String>,
+    pub name: Arc<std::sync::Mutex<Option<String>>>,
     pub stdin_tx: mpsc::Sender<Vec<u8>>,
     pub output_tx: broadcast::Sender<Vec<u8>>,
     pub scrollback: Arc<std::sync::Mutex<ScrollbackBuffer>>,
@@ -138,6 +139,7 @@ impl Session {
         let handle = SessionHandle {
             id: id.clone(),
             host: None,
+            name: Arc::new(std::sync::Mutex::new(None)),
             stdin_tx,
             output_tx,
             scrollback,
@@ -324,6 +326,7 @@ impl SessionManager {
         let handle = SessionHandle {
             id: session_id.clone(),
             host,
+            name: Arc::new(std::sync::Mutex::new(None)),
             stdin_tx,
             output_tx,
             scrollback,
@@ -388,10 +391,20 @@ impl SessionManager {
         self.sessions.read().await.keys().cloned().collect()
     }
 
-    pub async fn list_sessions_with_host(&self) -> Vec<(SessionId, Option<String>)> {
+    pub async fn list_sessions_with_host(&self) -> Vec<(SessionId, Option<String>, Option<String>)> {
         self.sessions.read().await.values()
-            .map(|s| (s.handle.id.clone(), s.handle.host.clone()))
+            .map(|s| (s.handle.id.clone(), s.handle.host.clone(), s.handle.name.lock().ok().and_then(|n| n.clone())))
             .collect()
+    }
+
+    pub async fn rename_session(&self, id: &str, name: String) -> bool {
+        if let Some(session) = self.sessions.read().await.get(id) {
+            if let Ok(mut n) = session.handle.name.lock() {
+                *n = Some(name);
+                return true;
+            }
+        }
+        false
     }
 
     pub async fn default_session(&self) -> Result<SessionHandle> {

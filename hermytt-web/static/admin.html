@@ -64,6 +64,10 @@ tr:hover td { background: rgba(74,138,244,0.03); }
 .role-bot { background: rgba(232,176,48,0.1); color: var(--yellow); border: 1px solid rgba(232,176,48,0.2); }
 .role-parser { background: rgba(240,150,60,0.1); color: #f0963c; border: 1px solid rgba(240,150,60,0.2); }
 
+/* Session names */
+.session-name { cursor: text; border-bottom: 1px dashed var(--border); padding-bottom: 1px; }
+.session-name:hover { border-color: var(--accent); }
+
 /* Clickable service rows */
 tr.svc-configurable { cursor: pointer; }
 tr.svc-configurable:hover td { background: rgba(74,138,244,0.06); }
@@ -265,7 +269,7 @@ async function refreshSessions() {
   tbody.innerHTML = data.sessions.map(s => `
     <tr>
       <td><span class="dot dot-on"></span></td>
-      <td>${esc(s.id)}${s.host ? ' <span class="meta-tag">' + esc(s.host) + '</span>' : ' <span class="meta-tag">local</span>'}</td>
+      <td><span class="session-name" ondblclick="renameSession('${esc(s.id)}',this)" title="double-click to rename">${esc(s.name || s.id)}</span>${s.host ? ' <span class="meta-tag">' + esc(s.host) + '</span>' : ''}</td>
       <td style="text-align:right;display:flex;gap:4px;justify-content:flex-end">
         <a href="/#${encodeURIComponent(s.id)}" class="btn">open</a>
         <button class="btn btn-red" onclick="killSession('${esc(s.id)}')">kill</button>
@@ -302,6 +306,31 @@ async function killSession(id) {
   if (!confirm('Kill session ' + id.slice(0,8) + '?')) return;
   await fetch('/internal/session/' + encodeURIComponent(id), { method: 'DELETE', headers: authHeaders() });
   refreshSessions();
+}
+
+function renameSession(id, el) {
+  const current = el.textContent;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = current;
+  input.style.cssText = 'font-size:12px;background:var(--bg);border:1px solid var(--accent);color:var(--text);padding:1px 4px;font-family:var(--font);width:180px;border-radius:3px';
+  el.replaceWith(input);
+  input.focus();
+  input.select();
+  const save = async () => {
+    const name = input.value.trim();
+    if (name && name !== current) {
+      await fetch('/session/' + encodeURIComponent(id) + '/name', {
+        method: 'PUT', headers: authHeaders(), body: JSON.stringify({ name })
+      });
+    }
+    refreshSessions();
+  };
+  input.addEventListener('blur', save);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { input.value = current; input.blur(); }
+  });
 }
 
 // --- Info ---

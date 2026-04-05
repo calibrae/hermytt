@@ -349,10 +349,11 @@ async fn list_sessions_with_host_returns_tuples() {
     let list = sessions.list_sessions_with_host().await;
     assert_eq!(list.len(), 2);
 
-    let remote = list.iter().find(|(id, _)| id == "remote-1").unwrap();
+    let remote = list.iter().find(|(id, _, _)| id == "remote-1").unwrap();
     assert_eq!(remote.1, Some("shytti-iggy".to_string()));
+    assert!(remote.2.is_none()); // no name set
 
-    let local = list.iter().find(|(id, _)| id != "remote-1").unwrap();
+    let local = list.iter().find(|(id, _, _)| id != "remote-1").unwrap();
     assert!(local.1.is_none());
 }
 
